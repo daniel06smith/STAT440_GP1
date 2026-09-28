@@ -1,0 +1,39 @@
+```{r}
+library(alr4)
+data(wblake)
+
+## Data on samples of small mouth bass collected in West Bearskin Lake,
+#Minnesota, in 1991. The file wblake includes only fish of ages 8 or younger.
+
+## Age: Age at capture (yrs)
+## Length: Length at capture (mm)
+## Scale: radius of a key scale (mm)
+
+head(wblake)
+
+
+fit_full <- lm(Scale~Age+Length, data=wblake)
+summary(fit_full)
+
+fit_Age <- lm(Scale~Age, data=wblake)
+summary(fit_Age)
+
+fit_Length <- lm(Scale~Length, data=wblake)
+summary(fit_Length)
+
+## 1a) marginal plot
+
+plot(x=wblake$Age, y=wblake$Scale, xlab='Age', ylab='Scale', 
+     main='Marginal plot of Age on Scale')
+abline(fit_Age, col='blue')
+
+## 1b) added-variable plot
+fit21 <- lm(Length~Age, data=wblake)
+
+par(mfrow=c(1,2))
+plot(x=fit21$res, y=fit_Age$res, xlab='Residual of Length ~ Age', ylab=
+    'Residual of Scale ~ Age', main='Added-variable plot for Length after Age')
+fit_added <- lm(fit_Age$res~fit21$res)
+abline(fit_added, col='blue')
+
+```
