@@ -3,3 +3,58 @@ title: "01_eda"
 format: html
 ---
 
+```{r}
+#| warning: False
+library(dplyr)
+library(tidyverse)
+```
+
+Exploring the `pipes.csv` dataset:
+
+```{r}
+pipes_raw <- read_csv("data/raw/pipes.csv")
+head(pipes_raw)
+```
+
+```{r}
+colSums(is.na(pipes_raw))
+```
+
+```{r}
+pipes <- pipes_raw |> drop_na()
+colSums(is.na(pipes))
+```
+
+Checking different Surface/Material:
+
+```{r}
+# Surfaces:
+pipes |> 
+  distinct(Surface) 
+```
+```{r}
+# Materials:
+pipes |> distinct(Material)
+```
+
+
+```{r}
+# Hist by Surface
+ggplot(data = pipes) +
+  geom_bar(mapping = aes(x = Surface))
+```
+
+```{r}
+# Hist by Material
+ggplot(data = pipes) +
+  geom_bar(aes(x = Material))
+```
+
+Next we check for occurance amount of each material x surface:
+
+```{r}
+count(pipes, Material, Surface, sort = TRUE)
+```
+
+We note that `wrought iron` within `grassland` is the most popular, followed by `water`, then `farmland`.
+
