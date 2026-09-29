@@ -2,3 +2,9 @@
 .Rhistory
 .RData
 .Ruserdata
+
+.venv
+.env
+__pycache__
+.ipynb_checkpoints
+.md

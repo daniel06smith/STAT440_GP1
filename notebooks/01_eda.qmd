@@ -57,4 +57,3 @@ count(pipes, Material, Surface, sort = TRUE)
 ```
 
 We note that `wrought iron` within `grassland` is the most popular, followed by `water`, then `farmland`.
-
