@@ -1,0 +1,61 @@
+---
+title: "Visualization"
+format: html
+---
+```{r}
+library(tidyverse)
+data <- read_csv("data/raw/pipes.csv")
+```
+
+
+```{r}
+bin <- 100  
+
+surface_grid <- data |>
+  filter(!is.na(Surface)) |>
+  mutate(
+    xm = (`GPS x1` + `GPS x2`) / 2,
+    ym = (`GPS y1` + `GPS y2`) / 2,
+    gx = floor(xm / bin) * bin + bin / 2, 
+    gy = floor(ym / bin) * bin + bin / 2
+  ) |>
+  count(gx, gy, Surface) |>
+  group_by(gx, gy) |>
+  slice_max(n, n = 1, with_ties = FALSE) |>  # most common surface per cell
+  ungroup()
+
+ggplot() +
+  geom_tile(
+    data = surface_grid,
+    aes(x = gx, y = gy, fill = Surface),
+    width = bin, height = bin, alpha = 0.35
+  ) +
+  geom_segment(
+    data = data,
+    aes(x = `GPS x1`, y = `GPS y1`,
+        xend = `GPS x2`, yend = `GPS y2`,
+        colour = Material)
+  ) +
+  coord_equal() +
+  theme_minimal()
+```
+
+
+```{r}
+ggplot(surface_grid, aes(x = gx, y = gy, fill = Surface)) +
+  geom_tile(width = bin, height = bin) +
+  coord_equal() +
+  labs(title = "Surface", x = "GPS x", y = "GPS y") +
+  theme_minimal()
+
+ggplot(data, aes(
+  x = `GPS x1`, y = `GPS y1`,
+  xend = `GPS x2`, yend = `GPS y2`,
+  colour = Material
+)) +
+  geom_segment() +
+  coord_equal() +
+  labs(title = "Pipe material", x = "GPS x", y = "GPS y") +
+  theme_minimal()
+```
+
