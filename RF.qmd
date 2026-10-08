@@ -1,0 +1,78 @@
+---
+title: "RandomForest"
+format: html
+---
+
+```{r}
+#| message: false
+#| warning: false 
+
+library(tidyverse)
+library(ranger)
+
+pipes <- read_csv("./data/raw/pipes.csv")
+train <- read_csv("./data/raw/train.csv")
+```
+
+Feature engineering
+```{r}
+df <- left_join(pipes, train)
+
+df['age_days'] <- df$Date - df$'Lay date'
+df['time_months'] <- df$age_days / 30.44
+df
+```
+
+
+```{r}
+set.seed(440)
+
+get_MSPE <- function(Y, Y.hat){ 
+  mean((Y - Y.hat)^2)
+}
+
+all_mtry <- c(9,10,11,12,13,19)
+all_nodesize <- c(1,2,3,5,8,10,15,20)
+all_pars <- expand.grid(mtry = all_mtry, nodesize = all_nodesize)
+n_pars <- nrow(all_pars)
+
+M <- 5
+
+n <- nrow(data)
+fold_id <- sample(rep(1:M, length.out = n))
+
+CV_MSPEs <- matrix(0, nrow = M, ncol = n_pars)
+
+for (i in 1:n_pars) {
+  cat("Parameter set", i, "of", n_pars, "\n")
+  
+  this_mtry      <- all_pars$mtry[i]
+  this_nodesize  <- all_pars$nodesize[i]
+  
+  for (j in 1:M) {
+    train_idx <- which(fold_id != j)
+    val_idx   <- which(fold_id == j)
+    
+    train_fold <- data[train_idx, ]
+    val_fold   <- data[val_idx, ]
+    
+    fit_rf <- ranger(
+      Y ~ ., 
+      data = train_fold,
+      mtry = this_mtry,
+      min.node.size = this_nodesize,
+      num.trees = 500
+    )
+    
+    pred <- predict(fit_rf, val_fold)$predictions
+    CV_MSPEs[j, i] <- get_MSPE(val_fold$Y, pred)
+  }
+}
+
+names_pars <- paste0(all_pars$mtry, "-", all_pars$nodesize)
+colnames(CV_MSPEs) <- names_pars
+
+best_idx <- which.min(colMeans(CV_MSPEs))
+best_params <- all_pars[best_idx, ]
+```
+
