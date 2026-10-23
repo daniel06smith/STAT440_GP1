@@ -101,7 +101,7 @@ priority <- needs_replacement %>%
   )
 head(priority)
 
-# write_csv(priority_iron, "priority_all.csv")
+# write_csv(priority, "priority_all.csv")
 ```
 
 
