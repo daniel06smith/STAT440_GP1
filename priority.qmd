@@ -35,6 +35,7 @@ priority_list <- function(net, leaks_all, type_weight = NULL) {
   
   # pipes that could ever leak (everything except polyurethane)
   possible_leak <- net %>% filter(Material != "polyurethane") %>%
+    #integer 0/1 for logistic regression
     mutate(y = as.integer(leaked))
   
   #likelihood of leaking using fit model
@@ -51,19 +52,23 @@ priority_list <- function(net, leaks_all, type_weight = NULL) {
   open <- possible_leak %>% filter(!leaked)
   
   out <- open %>%
-    mutate(p              = predict(fit, open, type = "response"),
-           cost_if_leak   = predict(cost_fit, open, type = "response"),
-           exp_loss       = p * cost_if_leak,
-           loss_per_metre = exp_loss / len)          # 4. length
+    mutate(p = predict(fit, open, type = "response"),
+           cost_if_leak = predict(cost_fit, open, type = "response"),
+           exp_loss = p * cost_if_leak,
+           loss_per_metre = exp_loss / len)
   
   #type of iron
   w <- rep(1, nrow(out))
   if (!is.null(type_weight)) {
     tw <- type_weight[out$Material]
+    #set weight to 1 if NA, to avoid unmatched data from recieving NA score
     w  <- ifelse(is.na(tw), 1, tw)
   }
+  
+  #calculate score
   out$score <- out$loss_per_metre * w
   
+  #sort by score
   out %>%
     arrange(desc(score)) %>%
     mutate(rank = row_number()) %>%
@@ -73,13 +78,13 @@ priority_list <- function(net, leaks_all, type_weight = NULL) {
 ```
 
 ```{r}
-# ---- make the dataset ----
-pl      <- priority_list(net, leaks_all)     # all unleaked, non-polyurethane pipes
+#making dataset
+pl <- priority_list(net, leaks_all)     # all unleaked, non-polyurethane pipes
 pl_iron <- filter(pl, iron)                  # the pipes you must replace
 
 head(pl_iron, 10)
 nrow(pl_iron)                                # should be 26,245
 
 write_csv(pl_iron, "priority_iron.csv")
-write_csv(pl,      "priority_all.csv")
+write_csv(pl, "priority_all.csv")
 ```
