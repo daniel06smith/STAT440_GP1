@@ -1,0 +1,85 @@
+---
+title: "priority function"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(splines)
+
+pipe_data  <- read_csv("data/raw/pipes.csv")
+train_data <- read_csv("data/raw/train.csv")
+
+#table
+net <- pipe_data %>%
+  #cleaning up names, adding columns
+  transmute(id = `Pipe ID`, Material = replace_na(Material, "wrought iron"),
+            surface = Surface, x1 = `GPS x1`, y1 = `GPS y1`, x2 = `GPS x2`, y2 = `GPS y2`,
+            lay_year = year(`Lay date`)) %>%
+  mutate(len = sqrt((x1 - x2)^2 + (y1 - y2)^2),
+         mid_x = (x1 + x2) / 2, mid_y = (y1 + y2) / 2,
+         leaked = id %in% train_data$`Pipe ID`,
+         iron   = str_detect(Material, "iron") & !leaked,
+         lay_year = coalesce(lay_year,
+                             median(lay_year[Material == "wrought iron"], na.rm = TRUE)))
+
+#leaked records with cost
+leaks_all <- train_data %>% transmute(id = `Pipe ID`, Cost)
+
+```
+
+```{r}
+#priority function
+priority_list <- function(net, leaks_all, type_weight = NULL) {
+  
+  # pipes that could ever leak (everything except polyurethane)
+  possible_leak <- net %>% filter(Material != "polyurethane") %>%
+    mutate(y = as.integer(leaked))
+  
+  #likelihood of leaking using fit model
+  fit <- glm(y ~ Material + surface + ns(lay_year, 4) + log(len),
+             family = binomial, data = possible_leak)
+  
+  #cost of leak (if it leaks)
+  sev <- leaks_all %>% left_join(select(net, id, surface, Material, len), by = "id")
+  
+  cost_fit <- glm(Cost ~ surface + Material + log(len),
+                  family = Gamma(link = "log"), data = sev)
+  
+  # pipes that haven't leaked yet: the ones still at risk
+  open <- possible_leak %>% filter(!leaked)
+  
+  out <- open %>%
+    mutate(p              = predict(fit, open, type = "response"),
+           cost_if_leak   = predict(cost_fit, open, type = "response"),
+           exp_loss       = p * cost_if_leak,
+           loss_per_metre = exp_loss / len)          # 4. length
+  
+  #type of iron
+  w <- rep(1, nrow(out))
+  if (!is.null(type_weight)) {
+    tw <- type_weight[out$Material]
+    w  <- ifelse(is.na(tw), 1, tw)
+  }
+  out$score <- out$loss_per_metre * w
+  
+  out %>%
+    arrange(desc(score)) %>%
+    mutate(rank = row_number()) %>%
+    select(rank, id, iron, Material, surface, len, mid_x, mid_y,
+           p, cost_if_leak, exp_loss, loss_per_metre, score)
+}
+```
+
+```{r}
+# ---- make the dataset ----
+pl      <- priority_list(net, leaks_all)     # all unleaked, non-polyurethane pipes
+pl_iron <- filter(pl, iron)                  # the pipes you must replace
+
+head(pl_iron, 10)
+nrow(pl_iron)                                # should be 26,245
+
+write_csv(pl_iron, "priority_iron.csv")
+write_csv(pl,      "priority_all.csv")
+```

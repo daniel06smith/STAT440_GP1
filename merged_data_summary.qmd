@@ -10,7 +10,6 @@ pipe_data <- read_csv("data/raw/pipes.csv")
 train_data <- read_csv("data/raw/train.csv")
 ```
 
-
 ```{r}
 merged_data <- merge(pipe_data, train_data, by = "Pipe ID")
 head(merged_data)
@@ -49,6 +48,7 @@ avg_cost_material <- merged_data_clean %>%
 
 avg_cost_material
 ```
+
 ```{r}
 #Graph avg cost for surface
 ggplot(avg_cost_surface, aes(x = Surface, y = avg_cost_surface)) +
@@ -62,7 +62,7 @@ ggplot(avg_cost_material, aes(x = Material, y = avg_cost_material)) +
   labs(x = "Material", y = "Average cost", title = "Average pipe material cost") +
   theme_minimal()
 ```
+
 Note that the 6th material "polyurethane" is not present because that material does not appear in train.csv
 
-Note that road surface and brass is the most costly
-We need to perform a seperate test to see how much each material and surface affect the cost together. (Anova test?)
+Note that road surface and brass is the most costly We need to perform a seperate test to see how much each material and surface affect the cost together. (Anova test?)
