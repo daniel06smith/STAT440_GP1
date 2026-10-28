@@ -1,0 +1,169 @@
+---
+title: "Priority Irons"
+author: "Cheryl Hu"
+output: html_document
+date: "2026-10-23"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r blues}
+## find "blue" pipes and fill gaps in data
+
+library(tidyverse)
+library(splines)
+
+pipes <- read_csv("Train_update3.csv")
+  # every pipe, with a Leaked flag (1 = leaked 2019-2026)
+leaks <- read_csv("train.csv")
+  # one row per recorded leak, with its repair cost
+
+network <- pipes %>%
+  mutate(
+    lay_year = year(as.Date(`Lay date`)),
+    material_missing = is.na(Material),
+    Material_m = replace_na(Material, "wrought iron"),   
+    # 8 NA pipes: the project says every iron pipe must be replaced, 
+      # so assume iron to be safe
+    # all 8 are on water surface, where wrought iron is most common
+    
+    lay_year_i  = coalesce(lay_year,                      
+                # 15 pipes
+                median(lay_year[Material_m == "wrought iron"], na.rm = TRUE)),
+    is_iron = str_detect(Material_m, "iron"),
+    mid_x = (`GPS x1` + `GPS x2`) / 2,
+    mid_y = (`GPS y1` + `GPS y2`) / 2
+      # use later for clustering/classification
+  )
+
+# blue pipes = never leaked (Leaked == 0, so not already replaced by a repair)
+# AND not polyurethane to begin with (those never needed replacing)
+needs_replacement <- network %>%
+  filter(Leaked == 0, Material_m != "polyurethane")
+
+nrow(needs_replacement)   
+# should be 27,248, matches Daniel's notebook
+```
+```{r models}
+## fitting 1. leak model (splines + log) and 2. cost model (gamma)
+
+
+# Likelihood: did the pipe leak in 2019-2026?
+# logistic regression (binomial) because the outcome is yes/no.
+leak_fit <- glm(
+  Leaked ~ Material_m + Surface + ns(lay_year_i, 4) + log(Length),
+  family = binomial,
+  data = filter(network, Material_m != "polyurethane")
+)
+
+# Where:
+# Leaked: whether the pipe actually leaked in 2019–2026 (1 = yes, 0 = no); the model predicts the probability of Leaked = 1
+# Material_m: the pipe’s original material, with the 8 missing values filled in as wrought iron
+# Surface: what the pipe runs under (grassland, farmland, swamp, water, road, or structure)
+# lay_year_i: the year the pipe was laid, with the 15 missing years filled in using the median for wrought iron
+# ns(lay_year_i, 4): lay year turned into a flexible curve so leak chance can rise and fall with age, uses spline with df = 4
+# log(Length): the log of the pipe’s length in metres, so extra length matters less for long pipes
+
+# cost data: one row per leak, joined to pipe features 
+sev <- leaks %>%
+  inner_join(select(network, `Pipe ID`, Material_m, Surface, Length), by = "Pipe ID")
+# head(sev)
+
+# cost given a leak (gamma model)
+cost_fit <- glm(
+  Cost ~ Surface + Material_m + log(Length),
+  family = Gamma(link = "log"),
+  data = sev
+)
+ summary(cost_fit)
+```
+
+```{r priority}
+## creating a priority dataset based on expected cost if not fixed
+
+# expected loss = P(leak) * cost if leak
+priority <- needs_replacement %>%
+  mutate(
+    p_leak_8yr = predict(leak_fit, newdata = pick(everything()), type = "response"),
+      # probability the pipe leaked over the 8-year window (2019-2026)
+    
+    p_leak_annual = 1 - (1 - p_leak_8yr)^(1/8),
+      # geometric dist: Y ~ geom(p)
+    
+    cost_if_leak = predict(cost_fit, newdata = pick(everything()), type = "response"),
+    exp_annual_loss = p_leak_annual * cost_if_leak,
+        # expected yearly cost if left unreplaced
+
+    loss_per_metre  = exp_annual_loss / Length
+  )
+head(priority)
+
+# write_csv(priority, "priority_all.csv")
+```
+
+
+
+```{r}
+## priority datasets (by iron)
+
+# only iron pipes are mandated! 
+priority_iron <- priority %>%
+  filter(is_iron)
+
+# rank by expected loss per meter
+iron_rank <- priority_iron %>%
+  group_by(Material_m) |>
+  summarise(loss_per_m = sum(exp_annual_loss) / sum(Length)) |>
+  mutate(type_rank = min_rank(desc(loss_per_m)))   
+# 1 = worst alloy
+
+# sort by expected annual loss
+priority_iron <- priority_iron %>%
+  left_join(select(iron_rank, Material_m, type_rank), by = "Material_m") %>%
+  arrange(desc(exp_annual_loss)) %>%
+  mutate(priority_rank = row_number()) %>%
+  select(priority_rank, 
+         `Pipe ID`, 
+         iron_type = Material_m, 
+         type_rank, 
+         Surface, 
+         Length,
+         p_leak_annual, 
+         cost_if_leak, 
+         exp_annual_loss, 
+         loss_per_metre, 
+         mid_x, 
+         mid_y, 
+         material_missing)
+
+head(priority_iron)
+
+# write_csv(priority_iron, "priority_iron.csv")
+```
+
+
+```{r}
+## checking based on loss (total expected yearly loss, sorted by surface),
+  # sanity check?
+priority_iron %>%
+  group_by(Surface) %>%
+  summarise(n = n(), avg_loss = mean(exp_annual_loss), total_loss = sum(exp_annual_loss)) %>%
+  arrange(desc(total_loss))
+```
+
+```{r}
+## just checking our datasets are lengthwise correct!
+
+priority_all <- read_csv("priority_all.csv")
+priority_iron <- read_csv("priority_iron.csv")
+nrow(priority_all)
+nrow(priority_iron)
+nrow(priority)
+
+# it's good! priority has copper + brass, 
+# while the new two take them out, so less rowss
+```
+
