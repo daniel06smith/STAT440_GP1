@@ -1,0 +1,30 @@
+{
+  "n_circles": 12824,
+  "independent_coverage": {
+    "n_required": 26245,
+    "n_uncovered": 0,
+    "min_margin_m": 0.04804952637292459
+  },
+  "expected": {
+    "feasible": true,
+    "spend": 140534434.0699999,
+    "surplus": 109465565.9300001,
+    "leak_cost": 36248476.71274973,
+    "score": 73217089.21725038,
+    "last_year": 14
+  },
+  "monte_carlo_100_draws": {
+    "score_mean": 95668876.4866917,
+    "spend_mean": 120246206.14479986,
+    "leak_cost_mean": 34084917.36850845,
+    "last_year_mean": 11.73,
+    "n_leaks_mean": 3406.8,
+    "score_sd": 907525.4866449418,
+    "spend_sd": 401160.44841080677,
+    "leak_cost_sd": 984543.7130280752,
+    "last_year_sd": 0.4461960433384737,
+    "n_leaks_sd": 42.335361440323474,
+    "n_draws": 100
+  },
+  "seconds": 231.2
+}
