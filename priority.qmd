@@ -22,7 +22,7 @@ net <- pipe_data %>%
          leaked = id %in% train_data$`Pipe ID`,
          iron   = str_detect(Material, "iron") & !leaked,
          lay_year = coalesce(lay_year,
-                             median(lay_year[Material == "wrought iron"], na.rm = TRUE)))
+         median(lay_year[Material == "wrought iron"], na.rm = TRUE)))
 
 #leaked records with cost
 leaks_all <- train_data %>% transmute(id = `Pipe ID`, Cost)
@@ -49,7 +49,7 @@ full_formula <- y ~ Material + surface + ns(lay_year, 4) + log(len) + Material:s
 # First half of data
 
 initial_1 <- glm(data = d[d$set == 1, ], formula = y ~ 1, family = binomial)
-final_1   <- glm(data = d[d$set == 1, ], formula = full_formula, family = binomial)
+final_1 <- glm(data = d[d$set == 1, ], formula = full_formula, family = binomial)
 
 step1 <- step(object = initial_1, scope = list(upper = final_1),k = log(n1))
 
@@ -82,7 +82,7 @@ forward2 <- step(object = initial_2, scope = list(upper = final_2),
 backward2 <- step(object = final_2, scope = list(lower = initial_2), 
                   direction = "backward", k = log(n2))
 
-# Compare what each one picked (step1 and step2 are your earlier direction = "both" runs)
+# Compare what each one picked
 formula(step1);     formula(step2)
 formula(forward1);  formula(forward2)
 formula(backward1); formula(backward2)
@@ -140,14 +140,14 @@ chosen
 formula(step2)
 
 #original formula and score
-pl_old      <- priority_list(net, leaks_all, power = 1)
+pl_old <- priority_list(net, leaks_all, power = 1)
 pl_iron_old <- filter(pl_old, iron)
 
 write_csv(pl_iron_old, "data/processed/priority_iron_old.csv")
 write_csv(pl_old, "data/processed/priority_all_old.csv")
 
 #stepwise formula and shrunk probability (power = 0.5)
-pl_new      <- priority_list(net, leaks_all, power = 0.5, leaks_formula = chosen)
+pl_new <- priority_list(net, leaks_all, power = 0.5, leaks_formula = chosen)
 pl_iron_new <- filter(pl_new, iron)
 
 write_csv(pl_iron_new, "data/processed/priority_iron_stepwise.csv")
@@ -156,7 +156,7 @@ write_csv(pl_new, "data/processed/priority_all_stepwise.csv")
 #sanity checks
 nrow(pl_iron_old); nrow(pl_iron_new)
 
-# how different are the two rankings?
+#how different are the two rankings?
 top_n <- 1000
 length(intersect(head(pl_iron_old$id, top_n), head(pl_iron_new$id, top_n))) / top_n
 ```
