@@ -1,0 +1,34 @@
+{
+  "tag": "v1c",
+  "cost_formula": "corrected",
+  "risk_file": "leak_risk_cheryl.csv",
+  "risk_probability_horizon_years": 1.0,
+  "n_circles": 13161,
+  "independent_coverage": {
+    "n_required": 26245,
+    "n_uncovered": 0,
+    "min_margin_m": 0.04804952637292459
+  },
+  "expected": {
+    "feasible": true,
+    "spend": 174913653.4500001,
+    "surplus": 75086346.5499999,
+    "leak_cost": 45044361.7268246,
+    "score": 30041984.823175296,
+    "last_year": 17
+  },
+  "monte_carlo_100_draws": {
+    "score_mean": 62231401.52063156,
+    "spend_mean": 145513691.2719001,
+    "leak_cost_mean": 42254907.20746832,
+    "last_year_mean": 14.0,
+    "n_leaks_mean": 3887.71,
+    "score_sd": 1006561.0074800444,
+    "spend_sd": 541850.381451986,
+    "leak_cost_sd": 1093884.7700873811,
+    "last_year_sd": 0.0,
+    "n_leaks_sd": 46.90960466792499,
+    "n_draws": 100
+  },
+  "seconds": 190.8
+}
