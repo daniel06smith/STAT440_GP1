@@ -31,6 +31,23 @@ Notebooks (jupytext "percent" `.py` with a paired `.ipynb`, same convention as
 | `ordering.py` | iterated Smith's rule, baseline orderings, dropping skipped circles |
 | `pipeline.py` | glue: build the plan, write/read the submission, independent coverage check |
 
+## Using another leak model, or the other cost formula
+
+```bash
+python scripts/build_plan.py --tag hazard --formula corrected     --risk-csv path/to/priority_all_hazard.csv --id-col id --p-col p --cost-col cost_if_leak --horizon-years 5
+```
+
+* `--horizon-years` says what the probability column means: 1 = per year (Cheryl), 8 = over
+  2019-2026 (Kenson's `priority_all.csv` / `_stepwise.csv`), 5 = next 5 years (Kenson's `_hazard.csv`).
+  It is converted to a yearly probability `1-(1-p)^(1/years)`; the simulator then assumes that
+  chance is the same every year (so Kenson's rising hazard is averaged over the window).
+* `--formula original` = `(surface_rate x area)^0.85`. **This is what the website's data page
+  states (checked 28 Oct 2026) and what every submission uses.** `corrected` =
+  `surface_rate x area^0.85` is the reading Wendy's notebook uses; under it our simulator
+  reproduces her reported replacement cost ($187,733,311.63) to the cent, which also validates
+  our cost logic. Her plan's cost figures are therefore too high for the real formula.
+* Output files are named by `--tag`; the default (`v1`) reproduces the committed plan exactly.
+
 ## Inputs and where they come from
 
 * `data/raw/pipes.csv`, `data/raw/train.csv` - the professor's data (identical to `data.zip`; MD5 checked).

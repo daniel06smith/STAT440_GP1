@@ -29,10 +29,32 @@ from .world import (
 TOTAL_BUDGET = ANNUAL_BUDGET * N_YEARS
 
 
+# Two readings of the area term exist:
+#   "original"  : (surface_rate * area) ** 0.85   <- the PDF we were given (printed 5 Oct)
+#   "corrected" : surface_rate * area ** 0.85     <- what Wendy's notebook says the corrected
+#                                                    project instructions state
+# Our simulator reproduces Wendy's reported replacement cost to the cent under "corrected".
+# The website's data page was checked on 28 Oct 2026 (by Qusai) and states the ORIGINAL
+# wording, so "original" is the default and the one all submissions use. "corrected" is kept
+# only so Wendy's cost numbers can be reproduced.
+COST_FORMULA = "original"
+
+
+def set_cost_formula(name: str) -> None:
+    """Choose the area-term formula for everything in this process ('original'|'corrected')."""
+    global COST_FORMULA
+    if name not in ("original", "corrected"):
+        raise ValueError("formula must be 'original' or 'corrected'")
+    COST_FORMULA = name
+
+
 def fixed_cost(surface_rate: float, radius: float) -> float:
     """The part of a work-unit cost that does not depend on which pipes are non-poly:
-    100 + (surface_rate * area) ** 0.85."""
-    return BASE_FEE + (surface_rate * math.pi * radius * radius) ** AREA_EXPONENT
+    100 + (surface_rate * area) ** 0.85   (original)   or   100 + surface_rate * area ** 0.85."""
+    area = math.pi * radius * radius
+    if COST_FORMULA == "corrected":
+        return BASE_FEE + surface_rate * area**AREA_EXPONENT
+    return BASE_FEE + (surface_rate * area) ** AREA_EXPONENT
 
 
 def work_unit_cost(surface_rate: float, radius: float, nonpoly_metres: float) -> float:
