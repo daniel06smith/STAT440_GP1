@@ -1,0 +1,234 @@
+---
+title: "hazard function"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(splines)
+library(glmnet)
+
+pipe_data  <- read_csv("data/raw/pipes.csv")
+train_data <- read_csv("data/raw/train.csv")
+
+#table
+net <- pipe_data %>%
+  #cleaning up names, adding columns
+  transmute(id = `Pipe ID`, Material = replace_na(Material, "wrought iron"),
+            surface = Surface, x1 = `GPS x1`, y1 = `GPS y1`, x2 = `GPS x2`, y2 = `GPS y2`,
+            lay_year = year(`Lay date`)) %>%
+  mutate(len = sqrt((x1 - x2)^2 + (y1 - y2)^2),
+         mid_x = (x1 + x2) / 2, mid_y = (y1 + y2) / 2,
+         leaked = id %in% train_data$`Pipe ID`,
+         iron   = str_detect(Material, "iron") & !leaked,
+         lay_year = coalesce(lay_year,
+                             median(lay_year[Material == "wrought iron"], na.rm = TRUE)))
+
+#leaked records with cost
+##changed to include leak_year
+leaks_all <- train_data %>% transmute(id = `Pipe ID`, leak_year = year(Date), Cost)
+
+```
+
+```{r}
+
+mats  <- setdiff(sort(unique(net$Material)), "polyurethane")
+surfs <- sort(unique(net$surface))
+
+# builds the same set of columns for any table, so training and prediction match
+hazard_x <- function(df) {
+  df <- df %>% mutate(Material = factor(Material, levels = mats),
+                      surface  = factor(surface,  levels = surfs))
+  model.matrix(~ Material * (age + I(age^2)) + surface + log(len) + age:log(len),
+               data = df)[, -1]
+}
+
+priority_hazard <- function(net, leaks_all, last_year = 2026, horizon = 5,
+                            power = 1, type_weight = NULL) {
+  #last_year: last year of leak data to use; horizon: how many future years to predict
+  
+  d <- net %>%
+    filter(Material != "polyurethane") %>%
+    left_join(select(leaks_all, id, leak_year), by = "id") %>%
+    #hide leaks after last_year
+    mutate(leak_year = ifelse(leak_year > last_year, NA, leak_year),   
+    iron = str_detect(Material, "iron") & is.na(leak_year))
+  
+  #one row per pipe per year, until it leaks
+  py <- d %>%
+    cross_join(tibble(year = 2019:last_year)) %>%
+    filter(is.na(leak_year) | year <= leak_year) %>%
+    mutate(y   = as.integer(!is.na(leak_year) & year == leak_year),
+           age = (year - lay_year - 60) / 20)
+  
+  #yearly leak chance; the age curve is allowed to differ by material
+  x   <- hazard_x(py)
+  fit <- glmnet(x, py$y, family = "binomial", alpha = 0)
+  
+  #predict the next `horizon` years for pipes that haven't leaked
+  open <- d %>% filter(is.na(leak_year))
+  fut <- open %>%
+    cross_join(tibble(step = 1:horizon)) %>%
+    mutate(year = last_year + step,
+           age  = (year - lay_year - 60) / 20)
+  fut$ph <- as.numeric(predict(fit, hazard_x(fut), s = min(fit$lambda), 
+                               type = "response"))
+  
+  #chance of leaking in the window
+  p_win <- fut %>% group_by(id) %>% summarise(p = 1 - prod(1 - ph))
+  
+  #cost if it leaks (same model as before, past leaks only)
+  sev <- leaks_all %>% filter(leak_year <= last_year) %>%
+    left_join(select(net, id, surface, Material, len), by = "id")
+  cost_fit <- glm(Cost ~ surface + Material + log(len),
+                  family = Gamma(link = "log"), data = sev)
+  
+  w <- rep(1, nrow(open))
+  out <- open %>% left_join(p_win, by = "id") %>%
+    mutate(cost_if_leak   = predict(cost_fit, open, type = "response"),
+           exp_loss       = p * cost_if_leak,
+           loss_per_metre = exp_loss / len)
+  if (!is.null(type_weight)) {
+    tw <- type_weight[out$Material]; w <- ifelse(is.na(tw), 1, tw)
+  }
+  out$score <- out$p^power * out$cost_if_leak / out$len * w
+  
+  out %>% arrange(desc(score)) %>% mutate(rank = row_number()) %>%
+    select(rank, id, iron, Material, surface, len, mid_x, mid_y,
+           p, cost_if_leak, exp_loss, loss_per_metre, score)
+}
+```
+
+```{r}
+priority_list <- function(net, leaks_all, type_weight = NULL, power = 1,
+                          leaks_formula = y ~ Material + surface + ns(lay_year, 4) + log(len)) {
+  
+  #pipes that could ever leak (everything except polyurethane)
+  possible_leak <- net %>% filter(Material != "polyurethane") %>%
+    mutate(y = as.integer(leaked))
+  
+  #likelihood of leaking
+  fit <- glm(leaks_formula, family = binomial, data = possible_leak)
+  
+  # cost of leak (if it leaks)
+  sev <- leaks_all %>% left_join(select(net, id, surface, Material, len), by = "id")
+  cost_fit <- glm(Cost ~ surface + Material + log(len), 
+                  family = Gamma(link = "log"), data = sev)
+  
+  #pipes that haven't leaked yet
+  open <- possible_leak %>% filter(!leaked)
+  
+  out <- open %>%
+    mutate(p = predict(fit, open, type = "response"), 
+           cost_if_leak = predict(cost_fit, open, type = "response"),
+           exp_loss = p * cost_if_leak,
+           loss_per_metre = exp_loss / len)
+  
+  #type of iron
+  w <- rep(1, nrow(out))
+  if (!is.null(type_weight)) {
+    tw <- type_weight[out$Material]
+    w  <- ifelse(is.na(tw), 1, tw)
+  }
+  
+  #score: power = 1 is the old score (p * cost / len)
+  #smaller power shrinks p toward constant
+  out$score <- out$p^power * out$cost_if_leak / out$len * w
+  
+  out %>%
+    arrange(desc(score)) %>%
+    mutate(rank = row_number()) %>%
+    select(rank, id, iron, Material, surface, len, mid_x, mid_y, p, cost_if_leak,
+           exp_loss, loss_per_metre, score)
+}
+```
+
+```{r print csv of new model}
+pl_h <- priority_hazard(net, leaks_all, last_year = 2026, horizon = 5, power = 1)
+pl_h_iron <- filter(pl_h, iron)
+
+nrow(pl_h_iron)                    # 26,245
+summary(pl_h$p) 
+n_distinct(pl_h$score)            
+
+write_csv(pl_h_iron, "data/processed/priority_iron_hazard.csv")
+write_csv(pl_h,      "data/processed/priority_all_hazard.csv")
+```
+
+```{r comparison}
+compare <- function(cutoff) {
+  # what really happened after the cutoff (the "future" we score against)
+  actual <- leaks_all %>% filter(leak_year > cutoff)
+  N      <- 750 * (2026 - cutoff)          # about how many pipes $10M per year can replace
+  
+  # real leak cost landing on the N top-ranked iron pipes (higher = better)
+  cap <- function(pl) {
+    top <- pl %>% filter(iron) %>% slice_max(score, n = N, with_ties = FALSE)
+    stopifnot(nrow(top) == N)              # stops with an error if scores tie or go missing
+    sum(actual$Cost[actual$id %in% top$id])
+  }
+  
+  # the network as it stood at the cutoff (no leaks after it)
+  net_bt <- net %>%
+    mutate(leaked = id %in% leaks_all$id[leaks_all$leak_year <= cutoff],
+           iron   = str_detect(Material, "iron") & !leaked)
+  past <- leaks_all %>% filter(leak_year <= cutoff)
+  
+  # the three models
+  pl_old  <- priority_list(net_bt, past, power = 1)
+  pl_step <- priority_list(net_bt, past, power = 0.5,
+                           leaks_formula = y ~ Material + ns(lay_year, 4))
+  pl_haz  <- priority_hazard(net, leaks_all, last_year = cutoff,
+                             horizon = 2026 - cutoff, power = 1)
+  
+  message("finished cutoff ", cutoff)
+  
+  tibble(cutoff   = cutoff,
+         old      = cap(pl_old),
+         stepwise = cap(pl_step),
+         hazard   = cap(pl_haz),
+         # the most any ranking could catch from the iron pipes at this cutoff
+         max_iron = sum(actual$Cost[actual$id %in% filter(pl_haz, iron)$id]))
+}
+
+results <- map_dfr(2021:2025, compare)
+
+# show in $M, with every column
+results %>%
+  mutate(across(-cutoff, ~ round(.x / 1e6, 1))) %>%
+  print(width = Inf)
+```
+
+```{r plot}
+# long format: one row per cutoff per model
+plot_data <- results %>%
+  pivot_longer(c(old, stepwise, hazard), names_to = "model", values_to = "caught") %>%
+  mutate(model  = factor(model, levels = c("old", "stepwise", "hazard")),
+         cutoff = factor(cutoff),
+         caught_m = caught / 1e6,                 # $M
+         pct_of_max = caught / max_iron * 100)    # share of the iron leak cost available
+
+cols <- c(old = "grey60", stepwise = "steelblue", hazard = "firebrick")
+
+# ---- Plot 1: leak cost caught, in $M ----
+ggplot(plot_data, aes(x = cutoff, y = caught_m, fill = model)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  geom_text(aes(label = round(caught_m)),
+            position = position_dodge(width = 0.8), vjust = -0.4, size = 3) +
+  scale_fill_manual(values = cols) +
+  labs(title = "Leak cost caught by the top-ranked pipes",
+       subtitle = "Each model only sees leaks through the cutoff year; higher is better",
+       x = "Cutoff year (pretend start of the next year)",
+       y = "Real leak cost caught ($M)", fill = "Model") +
+  theme_minimal()
+
+# ---- Plot 2: share of the available iron leak cost caught ----
+ggplot(plot_data, aes(x = cutoff, y = pct_of_max, group = model, colour = model)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  scale_colour_manual(values = cols) +
+  labs(title = "Share of the available iron leak cost caught",
+       x = "Cutoff year", y = "% of leak cost on remaining iron pipes", colour = "Model") +
+  theme_minimal()
+```
