@@ -17,10 +17,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from pipeplan.geometry import convex_hull, min_enclosing_circle  # noqa: E402
+from pipeplan import simulator  # noqa: E402
 from pipeplan.simulator import (  # noqa: E402
     expected_score, monte_carlo, prepare, sample_future, simulate, work_unit_cost,
 )
-from pipeplan.world import build_world  # noqa: E402
+from pipeplan.world import build_world, window_to_annual  # noqa: E402
 
 
 def make_world(rows, risk=None, leaked=()):
@@ -185,6 +186,42 @@ def test_sampled_leak_times_follow_the_annual_probability():
     t = np.array([sample_future(w, rng) for _ in range(20000)])
     assert abs((t[:, 0] < 1).mean() - 0.1) < 0.01
     assert abs((t[:, 0] < 2).mean() - 0.19) < 0.01
+
+
+# ------------------------------------------- formula switch & risk-file handling
+def test_cost_formula_switch():
+    try:
+        simulator.set_cost_formula("original")
+        a = work_unit_cost(85, 20.0, 0.0)
+        simulator.set_cost_formula("corrected")
+        b = work_unit_cost(85, 20.0, 0.0)
+    finally:
+        simulator.set_cost_formula("original")
+    area = math.pi * 20.0**2
+    assert abs(a - round(100 + (85 * area) ** 0.85, 2)) < 0.005
+    assert abs(b - round(100 + 85 * area**0.85, 2)) < 0.005
+    assert b > a  # corrected reading is dearer whenever surface_rate > 1
+
+
+def test_window_probability_to_yearly():
+    p8 = 0.2260
+    yearly = window_to_annual(p8, 8)
+    assert abs(1 - (1 - yearly) ** 8 - p8) < 1e-12
+    assert window_to_annual(0.0, 5) == 0.0
+
+
+def test_zero_leak_probability_is_allowed_but_missing_is_not():
+    rows = [("A", "cast iron", "grassland", 0, 0, 10, 0), ("B", "cast iron", "grassland", 50, 0, 60, 0)]
+    ok = pd.DataFrame({"Pipe ID": ["A", "B"], "p_annual": [0.0, 0.1], "leak_cost": [500.0, 500.0]})
+    w = make_world(rows, risk=ok)
+    assert w.lam[0] == 0.0 and w.lam[1] > 0
+    short = ok.iloc[:1]
+    try:
+        make_world(rows, risk=short)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a missing risk estimate must raise")
 
 
 if __name__ == "__main__":

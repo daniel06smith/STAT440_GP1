@@ -1,0 +1,34 @@
+{
+  "tag": "stepwise",
+  "cost_formula": "original",
+  "risk_file": "priority_all_stepwise.csv",
+  "risk_probability_horizon_years": 8.0,
+  "n_circles": 12807,
+  "independent_coverage": {
+    "n_required": 26245,
+    "n_uncovered": 0,
+    "min_margin_m": 0.04804952637292459
+  },
+  "expected": {
+    "feasible": true,
+    "spend": 140529630.37999976,
+    "surplus": 109470369.62000024,
+    "leak_cost": 36289939.85149272,
+    "score": 73180429.76850753,
+    "last_year": 14
+  },
+  "monte_carlo_100_draws": {
+    "score_mean": 96394999.07860352,
+    "spend_mean": 119561535.82629982,
+    "leak_cost_mean": 34043465.09509668,
+    "last_year_mean": 11.16,
+    "n_leaks_mean": 3436.65,
+    "score_sd": 903956.9403362217,
+    "spend_sd": 429840.71088272426,
+    "leak_cost_sd": 979895.3993821165,
+    "last_year_sd": 0.3684529491774707,
+    "n_leaks_sd": 43.186318213157286,
+    "n_draws": 100
+  },
+  "seconds": 237.2
+}

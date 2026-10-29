@@ -1,4 +1,8 @@
 {
+  "tag": "v1",
+  "cost_formula": "original",
+  "risk_file": "leak_risk_cheryl.csv",
+  "risk_probability_horizon_years": 1.0,
   "n_circles": 12824,
   "independent_coverage": {
     "n_required": 26245,
@@ -26,5 +30,5 @@
     "n_leaks_sd": 42.335361440323474,
     "n_draws": 100
   },
-  "seconds": 231.2
+  "seconds": 128.3
 }

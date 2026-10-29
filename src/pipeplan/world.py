@@ -142,9 +142,16 @@ def build_world(
         have = idx.reindex(r.index)
         if have.isna().any():
             raise ValueError("risk table contains unknown Pipe IDs")
-        p_annual[have.to_numpy(np.int64)] = r["p_annual"].to_numpy(float)
-        leak_cost[have.to_numpy(np.int64)] = r["leak_cost"].to_numpy(float)
-        missing = nonpoly0 & (p_annual == 0)
+        where = have.to_numpy(np.int64)
+        if r["p_annual"].isna().any() or r["leak_cost"].isna().any():
+            raise ValueError("risk table has missing probabilities or costs")
+        if ((r["p_annual"] < 0) | (r["p_annual"] >= 1)).any():
+            raise ValueError("p_annual must lie in [0, 1)")
+        p_annual[where] = r["p_annual"].to_numpy(float)
+        leak_cost[where] = r["leak_cost"].to_numpy(float)
+        has_risk = np.zeros(len(pipe_id), dtype=bool)
+        has_risk[where] = True
+        missing = nonpoly0 & ~has_risk  # a probability of exactly 0 is allowed; a MISSING one is not
         if missing.any():
             raise ValueError(f"{missing.sum()} non-poly pipes have no leak-risk estimate")
     # pipes that are already polyurethane never leak again (project notes)
@@ -170,12 +177,37 @@ def build_world(
     )
 
 
-def load_world(root: Path | None = None) -> World:
-    """Load the real data: data/raw/{pipes,train}.csv + data/processed/leak_risk_cheryl.csv."""
+def window_to_annual(p_window, years: float):
+    """Turn "probability of leaking within `years` years" into a yearly probability,
+    assuming the same chance every year:  1 - (1 - p)^(1/years)."""
+    return 1.0 - (1.0 - np.asarray(p_window, dtype=float)) ** (1.0 / years)
+
+
+def read_risk_csv(path, id_col: str = "Pipe ID", p_col: str = "p_leak_annual",
+                  cost_col: str = "cost_if_leak", horizon_years: float = 1.0) -> pd.DataFrame:
+    """Read any group member's leak-risk file into the table `build_world` expects.
+
+    horizon_years says what `p_col` means: 1 = already a yearly probability (Cheryl),
+    8 = probability of leaking over the 8 years 2019-2026 (Kenson's priority_all.csv /
+    stepwise), 5 = probability of leaking within the next 5 years (Kenson's hazard file).
+    """
+    df = pd.read_csv(path)
+    return pd.DataFrame({
+        "Pipe ID": df[id_col],
+        "p_annual": window_to_annual(df[p_col], horizon_years),
+        "leak_cost": df[cost_col].astype(float),
+    })
+
+
+def load_world(root: Path | None = None, risk: pd.DataFrame | None = None) -> World:
+    """Load the real data: data/raw/{pipes,train}.csv + a leak-risk table.
+
+    By default the risk table is Cheryl's (data/processed/leak_risk_cheryl.csv). Pass
+    `risk=read_risk_csv(...)` to use another model's output.
+    """
     root = Path(root) if root else REPO_ROOT
     pipes = pd.read_csv(root / "data/raw/pipes.csv")
     leaks = pd.read_csv(root / "data/raw/train.csv")
-    risk = pd.read_csv(root / "data/processed/leak_risk_cheryl.csv").rename(
-        columns={"p_leak_annual": "p_annual", "cost_if_leak": "leak_cost"}
-    )
+    if risk is None:
+        risk = read_risk_csv(root / "data/processed/leak_risk_cheryl.csv")
     return build_world(pipes, set(leaks["Pipe ID"]), risk[["Pipe ID", "p_annual", "leak_cost"]])
