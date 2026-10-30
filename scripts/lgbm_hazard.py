@@ -1,7 +1,7 @@
 """Yearly LightGBM leak model, checked with the same rolling holdout as scripts/leak_calibration.py.
 
     python scripts/lgbm_hazard.py                    # the holdout report (LightGBM variants vs the hazard GLM)
-    python scripts/lgbm_hazard.py --write-risk data/processed/leak_risk_lgbm.csv --variant "age+nbr"
+    python scripts/lgbm_hazard.py --write-risk data/processed/leak_risk_lgbm.csv
 
 The idea is the same as the hazard GLM: one row per pipe per year (a "pipe-year") while the pipe is still
 unleaked, target = "leaked this year?". A gradient-boosted tree model replaces the regression, so it can find
@@ -177,7 +177,7 @@ def run_holdout(d: dict, cutoffs=(2021, 2022, 2023, 2024, 2025), horizons=(1, 3)
     return pd.DataFrame(rows)
 
 
-def write_risk(d: dict, out: Path, variant: str) -> None:
+def write_risk(d: dict, out: Path, variant: str, level_scale: float = 0.5) -> None:
     """Fit on ALL data (2019-2026), write yearly probabilities for 2027-2051 for the pipes still non-poly in 2027.
     p_leak_annual = 10-year-average yearly probability, usable by build_plan.py with --horizon-years 1."""
     c = lc.LAST_YEAR
@@ -187,8 +187,10 @@ def write_risk(d: dict, out: Path, variant: str) -> None:
     years = list(range(c + 1, c + 26))
     P = np.column_stack([lgbm_p(fitted, d, at, y, c) for y in years])
     m = oos_level_shift(d, c, VARIANTS[variant])
-    P = apply_shift(P, m)
-    print(f"out-of-sample level multiplier: {m:.2f}")
+    # The plan backtest showed the level barely matters (full, half or no correction scored within 0.4 points), while
+    # the full correction can be extreme (x2.6 for 2026), so by default apply only half of it on the log scale.
+    P = apply_shift(P, m ** level_scale)
+    print(f"out-of-sample level multiplier: {m:.2f}  (applied: {m ** level_scale:.2f}, level_scale={level_scale})")
     p10 = 1 - np.prod(1 - P[:, :10], axis=1)
     df = pd.DataFrame(P, columns=[f"p_{y}" for y in years])
     df.insert(0, "p_leak_annual", 1 - (1 - p10) ** 0.1)
@@ -203,12 +205,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
     ap.add_argument("--write-risk", default=None)
-    ap.add_argument("--variant", default="base+nbr", choices=list(VARIANTS))
+    ap.add_argument("--variant", default="base (no space)", choices=list(VARIANTS))
+    ap.add_argument("--level-scale", type=float, default=0.5,
+                    help="0 = no level correction, 1 = full out-of-sample correction, default 0.5 (half, log scale)")
     args = ap.parse_args()
     root = Path(args.root)
     d = add_geometry(root, lc.load(root))
     if args.write_risk:
-        write_risk(d, Path(args.write_risk) if Path(args.write_risk).is_absolute() else root / args.write_risk, args.variant)
+        write_risk(d, Path(args.write_risk) if Path(args.write_risk).is_absolute() else root / args.write_risk, args.variant, args.level_scale)
         return
     res = run_holdout(d)
     res["leaks_ratio"] = res["pred_leaks"] / res["actual_leaks"]

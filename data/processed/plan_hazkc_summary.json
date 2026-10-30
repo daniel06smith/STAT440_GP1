@@ -1,0 +1,34 @@
+{
+  "tag": "hazkc",
+  "cost_formula": "corrected",
+  "risk_file": "priority_all_hazard.csv",
+  "risk_probability_horizon_years": 5.0,
+  "n_circles": 13055,
+  "independent_coverage": {
+    "n_required": 26245,
+    "n_uncovered": 0,
+    "min_margin_m": 0.05000000000000071
+  },
+  "expected": {
+    "feasible": true,
+    "spend": 174060456.31,
+    "surplus": 75939543.69,
+    "leak_cost": 32876662.156756945,
+    "score": 43062881.53324305,
+    "last_year": 17
+  },
+  "monte_carlo_100_draws": {
+    "score_mean": 68765527.8236797,
+    "spend_mean": 150876977.77279997,
+    "leak_cost_mean": 30357494.403520342,
+    "last_year_mean": 14.94,
+    "n_leaks_mean": 2545.99,
+    "score_sd": 962156.7820960386,
+    "spend_sd": 561646.8078184471,
+    "leak_cost_sd": 1083202.1626006542,
+    "last_year_sd": 0.23868325657594203,
+    "n_leaks_sd": 41.6683623897367,
+    "n_draws": 100
+  },
+  "seconds": 207.0
+}
