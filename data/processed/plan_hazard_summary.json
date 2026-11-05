@@ -1,0 +1,34 @@
+{
+  "tag": "hazard",
+  "cost_formula": "original",
+  "risk_file": "priority_all_hazard.csv",
+  "risk_probability_horizon_years": 5.0,
+  "n_circles": 12680,
+  "independent_coverage": {
+    "n_required": 26245,
+    "n_uncovered": 0,
+    "min_margin_m": 0.05000000000000071
+  },
+  "expected": {
+    "feasible": true,
+    "spend": 139524021.71999973,
+    "surplus": 110475978.28000027,
+    "leak_cost": 25703278.208276577,
+    "score": 84772700.0717237,
+    "last_year": 13
+  },
+  "monte_carlo_100_draws": {
+    "score_mean": 102301160.69932692,
+    "spend_mean": 123879966.69449984,
+    "leak_cost_mean": 23818872.60617326,
+    "last_year_mean": 12.0,
+    "n_leaks_mean": 2195.62,
+    "score_sd": 904853.0821050886,
+    "spend_sd": 402800.45351914613,
+    "leak_cost_sd": 997167.3228581687,
+    "last_year_sd": 0.0,
+    "n_leaks_sd": 40.8878189363744,
+    "n_draws": 100
+  },
+  "seconds": 238.0
+}

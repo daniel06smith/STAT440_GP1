@@ -1,0 +1,162 @@
+---
+title: "priority function"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(splines)
+
+pipe_data  <- read_csv("data/raw/pipes.csv")
+train_data <- read_csv("data/raw/train.csv")
+
+#table
+net <- pipe_data %>%
+  #cleaning up names, adding columns
+  transmute(id = `Pipe ID`, Material = replace_na(Material, "wrought iron"),
+            surface = Surface, x1 = `GPS x1`, y1 = `GPS y1`, x2 = `GPS x2`, y2 = `GPS y2`,
+            lay_year = year(`Lay date`)) %>%
+  mutate(len = sqrt((x1 - x2)^2 + (y1 - y2)^2),
+         mid_x = (x1 + x2) / 2, mid_y = (y1 + y2) / 2,
+         leaked = id %in% train_data$`Pipe ID`,
+         iron   = str_detect(Material, "iron") & !leaked,
+         lay_year = coalesce(lay_year,
+         median(lay_year[Material == "wrought iron"], na.rm = TRUE)))
+
+#leaked records with cost
+leaks_all <- train_data %>% transmute(id = `Pipe ID`, Cost)
+
+
+```
+
+```{r stepwise from 452}
+
+library(splines)
+set.seed(1)
+
+# pipes that could leak; y = 1 if leaked by the cutoff
+d <- net %>%
+  filter(Material != "polyurethane") %>%
+  mutate(y   = as.integer(leaked), set = sample(1:2, n(), replace = TRUE))
+
+n1 <- sum(d$set == 1)
+n2 <- sum(d$set == 2)
+
+#largest model we are willing to consider
+full_formula <- y ~ Material + surface + ns(lay_year, 4) + log(len) + Material:surface
+
+# First half of data
+
+initial_1 <- glm(data = d[d$set == 1, ], formula = y ~ 1, family = binomial)
+final_1 <- glm(data = d[d$set == 1, ], formula = full_formula, family = binomial)
+
+step1 <- step(object = initial_1, scope = list(upper = final_1),k = log(n1))
+
+# Second half of data
+
+initial_2 <- glm(data = d[d$set == 2, ], formula = y ~ 1, family = binomial)
+final_2   <- glm(data = d[d$set == 2, ], formula = full_formula, family = binomial)
+
+step2 <- step(object = initial_2, scope = list(upper = final_2), k = log(n2)
+)
+
+#########backward#############
+initial_1 <- glm(data = d[d$set == 1, ], formula = y ~ 1, family = binomial)
+final_1   <- glm(data = d[d$set == 1, ], formula = full_formula, family = binomial)
+
+forward1 <- step(object = initial_1, scope = list(upper = final_1),
+                 direction = "forward", k = log(n1))
+
+backward1 <- step(object = final_1, scope = list(lower = initial_1),
+                  direction = "backward", k = log(n1))
+
+#Second half of data
+
+initial_2 <- glm(data = d[d$set == 2, ], formula = y ~ 1, family = binomial)
+final_2   <- glm(data = d[d$set == 2, ], formula = full_formula, family = binomial)
+
+forward2 <- step(object = initial_2, scope = list(upper = final_2), 
+                 direction = "forward", k = log(n2))
+
+backward2 <- step(object = final_2, scope = list(lower = initial_2), 
+                  direction = "backward", k = log(n2))
+
+# Compare what each one picked
+formula(step1);     formula(step2)
+formula(forward1);  formula(forward2)
+formula(backward1); formula(backward2)
+
+```
+
+```{r}
+priority_list <- function(net, leaks_all, type_weight = NULL, power = 1,
+                          leaks_formula = y ~ Material + surface + ns(lay_year, 4) + log(len)) {
+  
+  #pipes that could ever leak (everything except polyurethane)
+  possible_leak <- net %>% filter(Material != "polyurethane") %>%
+    mutate(y = as.integer(leaked))
+  
+  #likelihood of leaking
+  fit <- glm(leaks_formula, family = binomial, data = possible_leak)
+  
+  # cost of leak (if it leaks)
+  sev <- leaks_all %>% left_join(select(net, id, surface, Material, len), by = "id")
+  cost_fit <- glm(Cost ~ surface + Material + log(len), 
+                  family = Gamma(link = "log"), data = sev)
+  
+  #pipes that haven't leaked yet
+  open <- possible_leak %>% filter(!leaked)
+  
+  out <- open %>%
+    mutate(p = predict(fit, open, type = "response"), 
+           cost_if_leak = predict(cost_fit, open, type = "response"),
+           exp_loss = p * cost_if_leak,
+           loss_per_metre = exp_loss / len)
+  
+  #type of iron
+  w <- rep(1, nrow(out))
+  if (!is.null(type_weight)) {
+    tw <- type_weight[out$Material]
+    w  <- ifelse(is.na(tw), 1, tw)
+  }
+  
+  #score: power = 1 is the old score (p * cost / len)
+  #smaller power shrinks p toward constant
+  out$score <- out$p^power * out$cost_if_leak / out$len * w
+  
+  out %>%
+    arrange(desc(score)) %>%
+    mutate(rank = row_number()) %>%
+    select(rank, id, iron, Material, surface, len, mid_x, mid_y, p, cost_if_leak,
+           exp_loss, loss_per_metre, score)
+}
+```
+
+```{r}
+#what the two halves of the stepwise search picked
+chosen <- formula(step1)
+chosen
+formula(step2)
+
+#original formula and score
+pl_old <- priority_list(net, leaks_all, power = 1)
+pl_iron_old <- filter(pl_old, iron)
+
+write_csv(pl_iron_old, "data/processed/priority_iron_old.csv")
+write_csv(pl_old, "data/processed/priority_all_old.csv")
+
+#stepwise formula and shrunk probability (power = 0.5)
+pl_new <- priority_list(net, leaks_all, power = 0.5, leaks_formula = chosen)
+pl_iron_new <- filter(pl_new, iron)
+
+write_csv(pl_iron_new, "data/processed/priority_iron_stepwise.csv")
+write_csv(pl_new, "data/processed/priority_all_stepwise.csv")
+
+#sanity checks
+nrow(pl_iron_old); nrow(pl_iron_new)
+
+#how different are the two rankings?
+top_n <- 1000
+length(intersect(head(pl_iron_old$id, top_n), head(pl_iron_new$id, top_n))) / top_n
+```
