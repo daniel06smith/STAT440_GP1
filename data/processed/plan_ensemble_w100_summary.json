@@ -1,7 +1,7 @@
 {
-  "tag": "ensemble_calibrated",
+  "tag": "ensemble_w100",
   "cost_formula": "original",
-  "risk_file": "leak_risk_ensemble_calibrated.csv",
+  "risk_file": "leak_risk_ensemble_w100.csv",
   "risk_probability_horizon_years": 1.0,
   "n_circles": 12873,
   "independent_coverage": {
@@ -30,5 +30,5 @@
     "n_leaks_sd": 50.817047565982456,
     "n_draws": 1000
   },
-  "seconds": 164.0
+  "seconds": 172.0
 }
