@@ -1,0 +1,144 @@
+---
+title: "Visualization Final"
+format: pdf
+---
+```{r}
+library(tidyverse)
+data <- read_csv("train_update.csv")
+set.seed(900)
+data<-na.omit(data)
+
+data<-cbind(data,as.numeric((data$Date-data$`Lay date`)/365))
+
+colnames(data)[12] <- "Age"
+
+data<-cbind(data,sqrt((data$`GPS y2`-data$`GPS y1`)^2 +
+                        (data$`GPS x2`-data$`GPS x1`)^2))
+colnames(data)[13] <- "Length"
+
+```
+```{r}
+sf1 <- 0.7
+sf2 <- 0.3
+library(ggplot2)
+#  Logic:
+#    1. randomly permute (reorder) numbers 1,2,...,n
+#    2. take positions of first 70% as training set "set=1"
+#    3. take positions of next 15% as validation set "set=2"
+#    4. take positions of last 15% as test set "set=3
+reorder <- sample.int(n = nrow(data), size = nrow(data), replace = FALSE)
+
+set <- ifelse(test = (reorder < sf1 * nrow(data)), yes = 1,
+  no = 2
+  )
+train <- data[set == 1,]
+test <-data[set==2,]
+
+```
+```{r}
+#5-Fold CV
+fold <- sample(rep(1:5, length.out = nrow(train)))
+formulas <- list(fit1 = Age ~Surface+Material+Length+`GPS x1`+`GPS x2`+`GPS y1`+`GPS y2`,fit2 = Age~Surface+Material+Length,fit3 = Age~ Surface+Material+Length+`Lay date`,fit4=Age~ (Surface*Material)+Length+`Lay date`,fit5=Age~ (Surface*Material)+`Lay date`,fit6 =Age~ (Surface*Material)+Length+(Material*`Lay date`),fit7=Age~ (Surface*Material)+(Material*`Lay date`),fit8=Age~ Surface+(Material*`Lay date`)+Length)
+mspe <- function(actual, predicted) mean((actual - predicted)^2)
+cv_results <- tibble(fold = integer(), model = character(), MSPE = double())
+forcv <-matrix(data=0,nrow=8,ncol=5)
+
+for (k in 1:5) {
+  cv_train <- train[fold != k, ]
+  cv_valid <- train[fold == k, ]
+  counts<-1
+
+  for (model_name in names(formulas)) {
+    
+    fit <- lm(formulas[[model_name]], data = cv_train)
+    predicted <- predict(fit,cv_valid)
+    forcv[counts,k]<-mspe(cv_valid$Age, predicted)
+    cv_results <- add_row(
+      cv_results,
+      fold = k,
+      model = model_name,
+      MSPE = mspe(cv_valid$Age, predicted)
+    )
+    counts<-counts+1
+  }
+}
+cv_mspe_table <-matrix(c(mean(na.omit(forcv[1,])),mean(na.omit(forcv[2,])),mean(na.omit(forcv[3,])),mean(na.omit(forcv[4,])),mean(na.omit(forcv[5,])),mean(na.omit(forcv[6,])),mean(na.omit(forcv[7,])),mean(na.omit(forcv[8,]))))
+rownames(cv_mspe_table)<-c(as.character(formulas))
+colnames(cv_mspe_table)<-c("CV MSPE")
+knitr::kable(cv_mspe_table)
+
+best_fit <-lm(Age ~ (Surface * Material) + Length + (Material * `Lay date`),data=train)
+best_fit_preds <-predict(best_fit,test)
+#cv_results
+```
+
+
+
+```{r}
+ggplot(data=test)+geom_point(mapping=aes(x=best_fit_preds,y=as.numeric(Age),colour=Material))+ geom_abline(a=0,b=1)+labs(x="Predicted # Years Before Breaking", y="Actual # Years before breaking")
+```
+```{r}
+ggplot(data=test)+geom_point(mapping=aes(x=best_fit_preds,y=as.numeric(Age),colour=Surface))+ geom_abline(a=0,b=1)+labs(x="Predicted # Years Before Breaking", y="Actual # Years before breaking")
+```
+
+
+```{r}
+#Contains all data, leaked and not leaked
+data2 <- read_csv("STAT440Project1_files/Train_update3.csv")
+data2 <-na.omit(data2)
+#data that havent leaked and arent polyurethane
+data2nl <- filter(data2,Leaked=="0"& Material!="polyurethane")
+full_fit <-lm(Age ~ (Surface * Material) + Length + (Material * `Lay date`),data=data)
+pred <- predict(full_fit, newdata = data2nl)
+
+data2nl <-cbind(data2nl,(pred-data2nl$Age))
+colnames(data2nl)[13]<-"yrs2leak"
+ggplot(data=data2nl) +geom_point(mapping=aes(x=Age, y=pred,
+      colour=Material))+ geom_abline(a=0,b=1)+labs(x=
+        "Age of Unleaked Pipe", y="Predicted # Years before breaking")
+```
+
+```{r}
+#Note polyurethane not included
+ggplot(data2nl) +
+  geom_segment(
+    aes(x = `GPS x1`, y = `GPS y1`, xend = `GPS x2`, yend = `GPS y2`, 
+        color = yrs2leak),
+    linewidth = 3, lineend = "round"
+  ) +
+  geom_point(aes(x = `GPS x1`, y = `GPS y1`), color = "grey30", size = 0.2) +  
+  geom_point(aes(x = `GPS x2`, y = `GPS y2`), color = "grey30", size = 0.2) +  
+  scale_color_gradient(
+    low = "red", high = "forestgreen",
+    name = "Years until\nexpected leak"
+  ) +
+  coord_equal() +
+  labs(title = "Pipe network by leak risk", x = "X", y = "Y") +
+  theme_minimal()
+
+```
+
+```{r}
+#Note polyurethane not included
+data2nl$is_iron <- ifelse(grepl(" iron",data2nl$Material), "Iron", "Not iron")
+
+ggplot(data2nl) +
+  geom_segment(
+    aes(x = `GPS x1`, y = `GPS y1`, xend = `GPS x2`, yend = `GPS y2`, 
+        color = is_iron),
+    linewidth = 2, lineend = "round"
+  ) +
+  geom_point(aes(x = `GPS x1`, y = `GPS y1`), color = "grey30", size = 0.2) +  
+  geom_point(aes(x = `GPS x2`, y = `GPS y2`), color = "grey30", size = 0.2) +  
+  scale_color_manual( values = c("Iron" = "firebrick", "Not iron" = "steelblue"),
+    name = "Material") +
+  coord_equal() +
+  labs(title = "Pipe network by Material", x = "X", y = "Y") +
+  theme_minimal()
+
+```
+
+```{r,include = FALSE}
+
+write.csv(data2nl, "pipeswyrsleakFINAL.csv", row.names = FALSE)
+```
