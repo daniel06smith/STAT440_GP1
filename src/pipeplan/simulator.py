@@ -26,6 +26,7 @@ from .world import (
     ANNUAL_BUDGET, AREA_EXPONENT, BASE_FEE, LINEAR_RATE, N_YEARS, RATE_BY_MASK, World,
 )
 
+PROJECT_YEARS = N_YEARS
 TOTAL_BUDGET = ANNUAL_BUDGET * N_YEARS
 
 
@@ -173,6 +174,25 @@ def simulate(world: World, prep: Prepared, leak_time: np.ndarray | None = None,
         "n_skipped": n_skip,
         "exec_year": exec_year,
     }
+
+
+def simulate_project(world: World, prep: Prepared,
+                     leak_time: np.ndarray | None = None,
+                     leak_cost: np.ndarray | None = None,
+                     annual_budget: float = ANNUAL_BUDGET) -> dict:
+    """Simulate using the complete 25-year project window.
+
+    A backtest may score a shorter historical period, but that scoring horizon
+    must not shorten the replacement project's budget window.
+    """
+    return simulate(
+        world,
+        prep,
+        leak_time=leak_time,
+        leak_cost=leak_cost,
+        annual_budget=annual_budget,
+        n_years=PROJECT_YEARS,
+    )
 
 
 def sample_future(world: World, rng: np.random.Generator) -> np.ndarray:
