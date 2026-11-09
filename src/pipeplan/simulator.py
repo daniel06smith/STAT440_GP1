@@ -196,11 +196,29 @@ def simulate_project(world: World, prep: Prepared,
 
 
 def sample_future(world: World, rng: np.random.Generator) -> np.ndarray:
-    """Draw leak times: each non-poly pipe leaks after Exp(lam) years, so that
-    P(leaks within y years) = 1 - (1 - p_annual)^y exactly like the risk model."""
+    """Draw leak times (years after 1 Jan 2027; inf = not within the window).
+
+    Constant risk: each non-poly pipe leaks after Exp(lam) years, so that
+    P(leaks within y years) = 1 - (1 - p_annual)^y exactly like the risk model.
+    Year-by-year risk: the hazard is constant within each year, so draw E ~ Exp(1) and find
+    where the cumulative hazard crosses E (inverse-transform sampling)."""
     t = np.full(world.n, np.inf)
-    a = world.lam > 0
-    t[a] = rng.exponential(1.0 / world.lam[a])
+    if not world.time_varying:
+        a = world.lam > 0
+        t[a] = rng.exponential(1.0 / world.lam[a])
+        return t
+    H = world.cum_hazard
+    a = H[:, -1] > 0
+    E = rng.exponential(1.0, size=int(a.sum()))
+    Ha = H[a]
+    y = (Ha[:, 1:] < E[:, None]).sum(axis=1)  # number of whole years survived
+    inside = y < Ha.shape[1] - 1
+    rows = np.flatnonzero(inside)
+    yy = y[inside]
+    lam_y = Ha[rows, yy + 1] - Ha[rows, yy]
+    ta = np.full(len(E), np.inf)
+    ta[rows] = yy + (E[rows] - Ha[rows, yy]) / lam_y
+    t[a] = ta
     return t
 
 
@@ -234,8 +252,9 @@ def expected_score(world: World, prep: Prepared, annual_budget: float = ANNUAL_B
     2. Because unspent money carries over, a circle whose running total spend is
        `cum` runs in year ``max(0, ceil(cum / 10M) - 1)``.
     3. A pipe replaced at the start of year y has been exposed for y years, so
-       its expected leak cost is  K * (1 - (1 - p)^y);  a pipe that is never
-       replaced is exposed for all 25 years.
+       its expected leak cost is  K * P(leak in the first y years)  -- K * (1 - (1 - p)^y)
+       for a constant risk, K * (1 - exp(-cum_hazard[y])) for a year-by-year risk;
+       a pipe that is never replaced is exposed for all 25 years.
     """
     replaced = np.zeros(world.n, dtype=bool)
     repl_year = np.full(world.n, float(n_years))
@@ -258,7 +277,11 @@ def expected_score(world: World, prep: Prepared, annual_budget: float = ANNUAL_B
         repl_year[new] = y
     finished = year_of_circle.max() < n_years
     exposure = np.minimum(repl_year, n_years)
-    exp_leak = float((world.leak_cost * (1.0 - (1.0 - world.p_annual) ** exposure))[world.nonpoly0].sum())
+    if world.time_varying:
+        p_leak = world.leak_prob_by(exposure.astype(np.int64))
+    else:
+        p_leak = 1.0 - (1.0 - world.p_annual) ** exposure
+    exp_leak = float((world.leak_cost * p_leak)[world.nonpoly0].sum())
     feasible = bool(finished and prep.covers_all_iron)
     return {
         "feasible": feasible,

@@ -88,7 +88,7 @@ def choose_targets(world: World, params: Params) -> tuple[np.ndarray, np.ndarray
     """
     optional = world.nonpoly0 & ~world.required
     idx = np.flatnonzero(optional)
-    benefit = world.leak_cost[idx] * (1 - (1 - world.p_annual[idx]) ** params.h_opt)
+    benefit = world.leak_cost[idx] * world.leak_prob_by(int(params.h_opt), idx)
     cost = np.array([
         200 * world.length[i] + fixed_cost(world.surface_rate(np.array([i])), world.length[i] / 2)
         for i in idx
@@ -108,7 +108,11 @@ class Builder:
         # net cost of replacing an optional pipe we did NOT target but a circle swallows anyway
         self.inc_net = np.zeros(world.n)
         inc = world.nonpoly0 & ~self.target
-        self.inc_net[inc] = LINEAR_RATE * world.length[inc] - world.loss_rate[inc] * self.p.h_opt
+        if world.time_varying:
+            avoided = world.leak_cost[inc] * world.leak_prob_by(int(self.p.h_opt), np.flatnonzero(inc))
+        else:
+            avoided = world.loss_rate[inc] * self.p.h_opt
+        self.inc_net[inc] = LINEAR_RATE * world.length[inc] - avoided
         self.owner = np.full(world.n, -1, dtype=np.int64)  # cluster id owning each target pipe
         self.clusters: dict[int, Cluster] = {}
         self._next_id = 0

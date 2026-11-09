@@ -45,12 +45,20 @@ ap.add_argument("--id-col", default="Pipe ID")
 ap.add_argument("--p-col", default="p_leak_annual")
 ap.add_argument("--cost-col", default="cost_if_leak")
 ap.add_argument("--horizon-years", type=float, default=1.0)
+ap.add_argument("--yearly", action="store_true",
+                help="use the year-by-year columns p_2027..p_2051 (time-aware planner) instead of one constant p")
 ap.add_argument("--mc-draws", type=int, default=100)
+ap.add_argument(
+    "--mc-seed",
+    type=int,
+    default=None,
+    help="Monte Carlo seed; omit for a fresh random seed on each run",
+)
 args = ap.parse_args()
 
 t0 = time.time()
 simulator.set_cost_formula(args.formula)
-risk = read_risk_csv(args.risk_csv, args.id_col, args.p_col, args.cost_col, args.horizon_years)
+risk = read_risk_csv(args.risk_csv, args.id_col, args.p_col, args.cost_col, args.horizon_years, yearly=args.yearly)
 world = load_world(risk=risk)
 res = build_plan(world, Params(verbose=True))
 prep = res["prep"]
@@ -63,7 +71,7 @@ circles_from_file = read_submission(sub_path)
 cov = independent_coverage_check(world, circles_from_file)
 prep_file = prepare(world, circles_from_file)
 ex = expected_score(world, prep_file)
-mc = monte_carlo(world, prep_file, n_draws=args.mc_draws, seed=1)
+mc = monte_carlo(world, prep_file, n_draws=args.mc_draws, seed=args.mc_seed)
 
 table = circle_table(world, prep_file)
 table.to_csv(ROOT / f"data/processed/circles_{args.tag}.csv", index=False)
@@ -73,6 +81,8 @@ summary = {
     "cost_formula": args.formula,
     "risk_file": str(Path(args.risk_csv).name),
     "risk_probability_horizon_years": args.horizon_years,
+    "yearly_risk": args.yearly,
+    "monte_carlo_seed": args.mc_seed,
     "n_circles": int(len(circles_from_file)),
     "independent_coverage": {k: v for k, v in cov.items() if k != "uncovered_ids"},
     "expected": {k: ex[k] for k in ("feasible", "spend", "surplus", "leak_cost", "score", "last_year")},

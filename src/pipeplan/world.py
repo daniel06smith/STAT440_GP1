@@ -70,12 +70,29 @@ class World:
     p_annual: np.ndarray  # P(leak in a given year) for pipes with nonpoly0 (else 0)
     lam: np.ndarray  # continuous hazard = -ln(1 - p_annual)
     leak_cost: np.ndarray  # E[cost | leak] in $
-    loss_rate: np.ndarray  # lam * leak_cost: expected $ lost per year while unreplaced
+    loss_rate: np.ndarray  # expected $ lost per year while unreplaced (see build_world)
     tree: cKDTree  # KD-tree over pipe MID points
+    # yearly hazard: cum_hazard[i, y] = -log P(pipe i survives the first y project years unreplaced),
+    # shape (n, N_YEARS + 1). With a constant p_annual it is simply lam * y.
+    cum_hazard: np.ndarray | None = None
+    time_varying: bool = False  # True when a year-by-year leak probability was supplied
 
     @property
     def n(self) -> int:
         return len(self.pipe_id)
+
+    # ------------------------------------------------------------------ yearly risk
+    def leak_prob_by(self, years, idx=None) -> np.ndarray:
+        """P(pipe leaks before the start of project year `years`) (years may be an array, 0..N_YEARS)."""
+        idx = np.arange(self.n) if idx is None else idx
+        y = np.clip(np.asarray(years, dtype=np.int64), 0, N_YEARS)
+        return -np.expm1(-self.cum_hazard[idx, y])
+
+    def delay_loss(self, idx: np.ndarray, year: int) -> np.ndarray:
+        """Expected $ lost by replacing at the start of year+1 instead of year: K * P(leak during `year`)."""
+        y = int(np.clip(year, 0, N_YEARS - 1))
+        H = self.cum_hazard[idx]
+        return self.leak_cost[idx] * (np.exp(-H[:, y]) - np.exp(-H[:, y + 1]))
 
     # ------------------------------------------------------------------
     def members(self, cx: float, cy: float, r: float) -> np.ndarray:
@@ -102,6 +119,11 @@ class World:
         return float(RATE_BY_MASK[np.bitwise_or.reduce(self.surf_bit[members])])
 
 
+# horizon (years) used to turn a year-by-year hazard into one "$ lost per year" number for the
+# circle builder's merge criterion: average expected loss per year over the first few project years.
+LOSS_RATE_HORIZON = 5
+
+
 def build_world(
     pipes: pd.DataFrame, leaked_ids: set, risk: pd.DataFrame | None
 ) -> World:
@@ -110,7 +132,9 @@ def build_world(
     pipes      : pipes.csv as a DataFrame
     leaked_ids : set of Pipe IDs that appear in train.csv (leaked 2019-2026)
     risk       : table with columns ``Pipe ID, p_annual, leak_cost`` for every pipe
-                 that is still non-polyurethane in 2027 (None -> zero risk)
+                 that is still non-polyurethane in 2027 (None -> zero risk). Optional columns
+                 ``py_0 .. py_24`` give P(leak in project year k | not leaked yet); when present
+                 the simulator, the ordering and the builder use them instead of a constant p_annual.
     """
     pipe_id = pipes["Pipe ID"].to_numpy(dtype=object)
     x1 = pipes["GPS x1"].to_numpy(float)
@@ -136,6 +160,7 @@ def build_world(
 
     p_annual = np.zeros(len(pipe_id))
     leak_cost = np.zeros(len(pipe_id))
+    where = np.empty(0, dtype=np.int64)
     if risk is not None:
         r = risk.set_index("Pipe ID")
         idx = pd.Series(np.arange(len(pipe_id)), index=pipe_id)
@@ -159,6 +184,22 @@ def build_world(
     leak_cost[~nonpoly0] = 0.0
     lam = -np.log1p(-p_annual)
 
+    year_cols = [f"py_{k}" for k in range(N_YEARS)]
+    time_varying = risk is not None and all(c in risk.columns for c in year_cols)
+    if time_varying:
+        py = np.zeros((len(pipe_id), N_YEARS))
+        P = risk[year_cols].to_numpy(float)
+        if np.isnan(P).any() or (P < 0).any() or (P >= 1).any():
+            raise ValueError("yearly probabilities must lie in [0, 1)")
+        py[where] = P
+        py[~nonpoly0] = 0.0
+        cum_hazard = np.concatenate([np.zeros((len(pipe_id), 1)), np.cumsum(-np.log1p(-py), axis=1)], axis=1)
+        h = LOSS_RATE_HORIZON
+        loss_rate = leak_cost * -np.expm1(-cum_hazard[:, h]) / h
+    else:
+        cum_hazard = lam[:, None] * np.arange(N_YEARS + 1)[None, :]
+        loss_rate = lam * leak_cost
+
     return World(
         pipe_id=pipe_id,
         x1=x1, y1=y1, x2=x2, y2=y2,
@@ -172,8 +213,10 @@ def build_world(
         p_annual=p_annual,
         lam=lam,
         leak_cost=leak_cost,
-        loss_rate=lam * leak_cost,
+        loss_rate=loss_rate,
         tree=cKDTree(np.column_stack([(x1 + x2) / 2, (y1 + y2) / 2])),
+        cum_hazard=cum_hazard,
+        time_varying=time_varying,
     )
 
 
@@ -184,19 +227,30 @@ def window_to_annual(p_window, years: float):
 
 
 def read_risk_csv(path, id_col: str = "Pipe ID", p_col: str = "p_leak_annual",
-                  cost_col: str = "cost_if_leak", horizon_years: float = 1.0) -> pd.DataFrame:
+                  cost_col: str = "cost_if_leak", horizon_years: float = 1.0,
+                  yearly: bool = False, first_year: int = 2027) -> pd.DataFrame:
     """Read any group member's leak-risk file into the table `build_world` expects.
 
     horizon_years says what `p_col` means: 1 = already a yearly probability (Cheryl),
     8 = probability of leaking over the 8 years 2019-2026 (Kenson's priority_all.csv /
     stepwise), 5 = probability of leaking within the next 5 years (Kenson's hazard file).
+    yearly=True also reads the columns p_<first_year> .. p_<first_year+24> (P(leak in that
+    year | not leaked yet)) so the plan uses the year-by-year risk.
     """
     df = pd.read_csv(path)
-    return pd.DataFrame({
+    out = pd.DataFrame({
         "Pipe ID": df[id_col],
         "p_annual": window_to_annual(df[p_col], horizon_years),
         "leak_cost": df[cost_col].astype(float),
     })
+    if yearly:
+        cols = [f"p_{first_year + k}" for k in range(N_YEARS)]
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"risk file has no yearly columns {missing[:3]}...")
+        for k, c in enumerate(cols):
+            out[f"py_{k}"] = df[c].astype(float)
+    return out
 
 
 def load_world(root: Path | None = None, risk: pd.DataFrame | None = None) -> World:
@@ -210,4 +264,5 @@ def load_world(root: Path | None = None, risk: pd.DataFrame | None = None) -> Wo
     leaks = pd.read_csv(root / "data/raw/train.csv")
     if risk is None:
         risk = read_risk_csv(root / "data/processed/leak_risk_cheryl.csv")
-    return build_world(pipes, set(leaks["Pipe ID"]), risk[["Pipe ID", "p_annual", "leak_cost"]])
+    keep = ["Pipe ID", "p_annual", "leak_cost"] + [c for c in risk.columns if c.startswith("py_")]
+    return build_world(pipes, set(leaks["Pipe ID"]), risk[keep])

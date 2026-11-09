@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from .construct import Builder, Params
-from .ordering import drop_redundant, smith_order
+from .ordering import drop_redundant, lp_order, smith_order
 from .simulator import Prepared, expected_score, prepare
 from .world import LINEAR_RATE, World
 
@@ -22,6 +22,21 @@ def build_plan(world: World, params: Params | None = None, order_iters: int = 8,
     builder = Builder(world, params or Params(verbose=verbose)).run()
     prep0 = prepare(world, builder.circles())
     ordered, log = smith_order(world, prep0, iters=order_iters, verbose=verbose)
+    if world.time_varying:
+        # Smith's rule can strand circles behind their pipes' leak spike; solve the year assignment
+        # as an LP (twice: the second pass uses the first-cover pattern of the first LP order) and
+        # keep whichever order has the best expected score.
+        best, best_score = ordered, expected_score(world, ordered)["score"]
+        cur = ordered
+        for k in range(2):
+            cur = lp_order(world, cur, verbose=verbose)
+            sc = expected_score(world, cur)["score"]
+            log.append({"iter": f"lp{k}", "score": sc})
+            if verbose:
+                print(f"LP order pass {k}: expected score ${sc:,.0f}")
+            if sc > best_score:
+                best, best_score = cur, sc
+        ordered = best
     final = drop_redundant(world, ordered)
     return {"builder": builder, "prep_unordered": prep0, "prep": final, "order_log": log}
 

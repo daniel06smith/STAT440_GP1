@@ -1,0 +1,35 @@
+{
+  "tag": "ensemble_w060",
+  "cost_formula": "original",
+  "risk_file": "leak_risk_ensemble_w060.csv",
+  "risk_probability_horizon_years": 1.0,
+  "monte_carlo_seed": null,
+  "n_circles": 12945,
+  "independent_coverage": {
+    "n_required": 26245,
+    "n_uncovered": 0,
+    "min_margin_m": 0.04804952637292459
+  },
+  "expected": {
+    "feasible": true,
+    "spend": 139902662.88999972,
+    "surplus": 110097337.11000028,
+    "leak_cost": 53242549.79504456,
+    "score": 56854787.31495572,
+    "last_year": 13
+  },
+  "monte_carlo_1000_draws": {
+    "score_mean": 90399065.54698451,
+    "spend_mean": 111400251.84825979,
+    "leak_cost_mean": 48200682.60475569,
+    "last_year_mean": 11.0,
+    "n_leaks_mean": 4320.832,
+    "score_sd": 1161378.5273432122,
+    "spend_sd": 395136.1381626035,
+    "leak_cost_sd": 1281521.3619852704,
+    "last_year_sd": 0.0,
+    "n_leaks_sd": 48.73934036586153,
+    "n_draws": 1000
+  },
+  "seconds": 115.1
+}

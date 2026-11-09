@@ -224,6 +224,81 @@ def test_zero_leak_probability_is_allowed_but_missing_is_not():
         raise AssertionError("a missing risk estimate must raise")
 
 
+# ------------------------------------------------------- year-by-year leak risk
+def _yearly_risk(ids, p_by_year, cost=1000.0):
+    """p_by_year: (len(ids), 25) array of P(leak in project year k | not leaked yet)."""
+    df = pd.DataFrame({"Pipe ID": ids, "p_annual": p_by_year[:, :10].mean(axis=1), "leak_cost": cost})
+    for k in range(25):
+        df[f"py_{k}"] = p_by_year[:, k]
+    return df
+
+
+def test_constant_yearly_risk_reproduces_constant_model():
+    rows = [(f"P{i}", "cast iron", "grassland", 1000 * i, 0, 1000 * i + 10, 0) for i in range(3)]
+    ids = [r[0] for r in rows]
+    w_const = make_world(rows)
+    w_year = make_world(rows, risk=_yearly_risk(ids, np.full((3, 25), 0.1)))
+    assert w_year.time_varying and not w_const.time_varying
+    assert np.allclose(w_const.cum_hazard, w_year.cum_hazard)
+    prep = prepare(w_const, np.array([[1000 * i + 5, 0, 5.02] for i in range(3)]))
+    kw = dict(annual_budget=3000, n_years=6)
+    assert abs(expected_score(w_const, prep, **kw)["leak_cost"] - expected_score(w_year, prep, **kw)["leak_cost"]) < 1e-9
+
+
+def test_expected_score_uses_the_yearly_risk_of_the_replacement_year():
+    # P0 never leaks; P1 is safe in year 0 and leaks with prob 0.9 in year 1.
+    rows = [(f"P{i}", "cast iron", "grassland", 1000 * i, 0, 1000 * i + 10, 0) for i in range(2)]
+    P = np.zeros((2, 25))
+    P[1, 1] = 0.9
+    w = make_world(rows, risk=_yearly_risk(["P0", "P1"], P))
+    prep = prepare(w, np.array([[5, 0, 5.02], [1005, 0, 5.02]]))  # each circle costs ~2.2k
+    # budget 2500/yr -> P1 runs at the start of year 1, before its risky year: no expected leak
+    ex = expected_score(w, prep, annual_budget=2500, n_years=25)
+    assert ex["repl_year"][1] == 1 and ex["leak_cost"] == 0.0
+    # budget 1200/yr -> P1 runs at the start of year 3, after its risky year: 0.9 * 1000
+    ex_late = expected_score(w, prep, annual_budget=1200, n_years=25)
+    assert ex_late["repl_year"][1] == 3 and abs(ex_late["leak_cost"] - 900.0) < 1e-6
+
+
+def test_sampled_leak_times_follow_the_yearly_probability():
+    rows = [("A", "cast iron", "grassland", 0, 0, 10, 0)]
+    P = np.full((1, 25), 0.02)
+    P[0, 3] = 0.5  # a spike in project year 3
+    w = make_world(rows, risk=_yearly_risk(["A"], P))
+    rng = np.random.default_rng(0)
+    t = np.array([sample_future(w, rng)[0] for _ in range(40000)])
+    surv3 = 0.98 ** 3
+    assert abs((t < 3).mean() - (1 - surv3)) < 0.01
+    assert abs(((t >= 3) & (t < 4)).mean() - surv3 * 0.5) < 0.01
+    assert abs((t < 25).mean() - (1 - 0.98 ** 24 * 0.5)) < 0.01
+
+
+def test_ordering_puts_a_spiking_pipe_first():
+    from pipeplan.ordering import smith_order
+    rows = [(f"P{i}", "cast iron", "grassland", 1000 * i, 0, 1000 * i + 10, 0) for i in range(2)]
+    P = np.full((2, 25), 0.01)
+    P[1, 0] = 0.6  # P1 spikes right now, P0 never does
+    w = make_world(rows, risk=_yearly_risk(["P0", "P1"], P))
+    prep = prepare(w, np.array([[5, 0, 5.02], [1005, 0, 5.02]]))
+    best, _ = smith_order(w, prep, iters=2, verbose=False)
+    assert best.circles[0, 0] == 1005
+
+
+def test_lp_order_replaces_each_pipe_before_its_spike():
+    from pipeplan.ordering import lp_order
+    ids = ["A", "B", "C"]
+    rows = [(k, "cast iron", "grassland", 1000 * i, 0, 1000 * i + 10, 0) for i, k in enumerate(ids)]
+    P = np.zeros((3, 25))
+    P[0, 0], P[1, 1], P[2, 2] = 0.9, 0.9, 0.9  # A spikes in year 0, B in year 1, C in year 2
+    w = make_world(rows, risk=_yearly_risk(ids, P))
+    # listed in the worst order; budget pays for exactly one circle (~2.2k) per year
+    prep = prepare(w, np.array([[2005, 0, 5.02], [1005, 0, 5.02], [5, 0, 5.02]]))
+    assert abs(expected_score(w, prep, annual_budget=2300)["leak_cost"] - 900.0) < 1e-6  # A waits to year 2
+    best = lp_order(w, prep, annual_budget=2300, verbose=False)
+    assert list(best.circles[:, 0]) == [5, 1005, 2005]
+    assert expected_score(w, best, annual_budget=2300)["leak_cost"] == 0.0
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

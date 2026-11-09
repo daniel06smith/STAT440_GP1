@@ -17,13 +17,16 @@ constant in time. Here the weight is NOT constant -- a pipe that survives
 longer has the same hazard, but the probability it is still unreplaced shrinks
 -- so we iterate: schedule -> estimate each circle's year -> recompute its
 survival-adjusted loss rate  sum_p K_p * lam_p * (1-p_p)^year  -> re-sort.
+With a year-by-year risk (World.time_varying) the weight is the expected $ lost by
+delaying the circle one year from its scheduled year: sum_p K_p * P(p leaks during that year),
+so a pipe whose batch spikes in 2035 is cheap to delay in 2027 but urgent by 2033.
 """
 from __future__ import annotations
 
 import numpy as np
 
 from .simulator import Prepared, expected_score, prepare
-from .world import ANNUAL_BUDGET, LINEAR_RATE, World
+from .world import ANNUAL_BUDGET, LINEAR_RATE, N_YEARS, World
 
 
 def permute(prep: Prepared, order: np.ndarray) -> Prepared:
@@ -69,7 +72,12 @@ def smith_order(world: World, prep: Prepared, iters: int = 8, verbose: bool = Tr
         new_pipes, cost = _first_cover(world, cur)
         rate = np.zeros(n)
         for j, pipes in enumerate(new_pipes):
-            if len(pipes):
+            if not len(pipes):
+                continue
+            if world.time_varying:
+                # expected $ lost by pushing this circle from its scheduled year to the next one
+                rate[j] = world.delay_loss(pipes, int(year_guess[j])).sum()
+            else:
                 rate[j] = np.sum(world.loss_rate[pipes] * (1 - world.p_annual[pipes]) ** year_guess[j])
         dens = np.where(cost > 0, rate / np.maximum(cost, 1e-9), -1.0)
         order = np.argsort(-dens, kind="stable")
@@ -85,6 +93,62 @@ def smith_order(world: World, prep: Prepared, iters: int = 8, verbose: bool = Tr
         if sc["score"] > best_score:
             best, best_score = cur, sc["score"]
     return best, log
+
+
+def lp_order(world: World, prep: Prepared, annual_budget: float = ANNUAL_BUDGET,
+             n_years: int = N_YEARS, verbose: bool = True) -> Prepared:
+    """Order circles by solving a year-assignment linear program (for year-by-year risk).
+
+    Smith's rule ranks a circle by the loss of delaying it one year *at its scheduled year*. With a
+    spiky hazard that is a trap: once a circle is scheduled after its pipes' spike, delaying it
+    further looks cheap (the damage is done), so it never moves back in front of the spike.
+
+    Instead choose each circle's year directly:
+        minimise   sum_j sum_y x_jy * L_j(y)          L_j(y) = sum_{pipes p first replaced by j} K_p * P(p leaks before year y)
+        subject to sum_y x_jy = 1                    (every circle runs once, within the window)
+                   sum_{y' <= y} spend_y' <= B * (y + 1)   (money arrives at B per year, unspent money carries over)
+    Circles cost ~$10k against a $10M yearly budget, and a basic LP solution splits at most one
+    circle per budget constraint between years, so rounding each circle to its main year loses
+    almost nothing. Within a year circles are sorted by urgency (next-year delay loss per dollar)
+    so that if a year overflows, the least urgent circles are the ones pushed back.
+    """
+    from scipy.optimize import linprog
+    from scipy.sparse import coo_matrix, csr_matrix, hstack, vstack
+
+    new_pipes, cost = _first_cover(world, prep)
+    live = np.flatnonzero(cost > 0)
+    n, Y = len(live), n_years
+    # L[j, y]: expected leak $ on circle j's pipes if it runs at the start of year y
+    lens = np.array([len(new_pipes[j]) for j in live])
+    flat = np.concatenate([new_pipes[j] for j in live])
+    pl = world.leak_cost[flat, None] * -np.expm1(-world.cum_hazard[flat, :Y])
+    starts = np.concatenate([[0], np.cumsum(lens)[:-1]])
+    L = np.add.reduceat(pl, starts, axis=0)
+    c = cost[live]
+
+    nv = n * Y  # x_jy at column j*Y + y, then Y spend variables s_y
+    cols = np.arange(nv)
+    A_one = csr_matrix((np.ones(nv), (np.repeat(np.arange(n), Y), cols)), shape=(n, nv + Y))
+    # s_y - sum_j c_j x_jy = 0
+    A_s = hstack([coo_matrix((-np.repeat(c, Y), (np.tile(np.arange(Y), n), cols)), shape=(Y, nv)),
+                  csr_matrix(np.eye(Y))])
+    A_eq = vstack([A_one, A_s]).tocsr()
+    b_eq = np.r_[np.ones(n), np.zeros(Y)]
+    A_ub = hstack([csr_matrix((Y, nv)), csr_matrix(np.tril(np.ones((Y, Y))))]).tocsr()
+    b_ub = annual_budget * np.arange(1, Y + 1)
+    res = linprog(np.r_[L.ravel(), np.zeros(Y)], A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq,
+                  bounds=(0, None), method="highs")
+    if res.status != 0:
+        raise RuntimeError(f"ordering LP failed: {res.message}")
+    X = res.x[:nv].reshape(n, Y)
+    year = X.argmax(axis=1)
+    urgency = (L[np.arange(n), np.minimum(year + 1, Y - 1)] - L[np.arange(n), year]) / np.maximum(c, 1e-9)
+    order_live = live[np.lexsort((-urgency, year))]
+    order = np.r_[order_live, np.flatnonzero(cost <= 0)]  # skipped circles last (dropped later)
+    if verbose:
+        n_split = int(((X > 1e-6).sum(axis=1) > 1).sum())
+        print(f"ordering LP: {n} circles, LP expected leak ${res.fun:,.0f}, {n_split} circles split between years")
+    return permute(prep, order)
 
 
 def _required_margins(world: World, prep: Prepared, j: int):

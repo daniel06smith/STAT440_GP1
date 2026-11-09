@@ -128,13 +128,21 @@ not one-off scratch work:
   ($11,850). So "replace early" dominates "wait and get a free
   replacement" for anything except the very lowest-risk, lowest-cost
   pipes.
-- **Age effect is non-monotonic, likely an installation-era/vintage
-  effect**: pipes laid ~1959-1979 (40-60 years old as of 2019) leak at
-  467/1000, roughly double the 20-40y (212/1000) and 60-80y (210/1000)
-  cohorts. All pipes were laid 1945-1985. Don't assume linear
-  age-hazard -- model lay-year cohort explicitly, and remember the
-  project window pushes ages 20 years further (up to ~105y by 2051),
-  beyond the observed training range, so extrapolation behavior matters.
+- **Leaks come in batch failure waves (an AGE spike whose age drifts by
+  batch)** -- supersedes the earlier "vintage effect" reading. ~82% of
+  2019-2026 leaks happen at ages 61-67. Each installation batch fails in
+  a ~1-year window (sd of failure age ~0.45 y); ~75% of a batch laid
+  1957+ fails in it (~45% for 1954-55), and the survivors drop back to
+  ~0.01 leaks/year. The failure age gets younger for newer batches,
+  ~0.26 y per lay year (~65 for 1955, 63.5 for 1959, 62.5 for 1963,
+  ~62 for 1964-65). Within a batch the leak date tracks the exact lay
+  date one-for-one, so use exact (decimal) ages, not year differences.
+  Consequence for 2027: the 1964 and 1965 batches (~4,900 unleaked
+  pipes) are mid-spike and most will leak in 2027-28 unless replaced on
+  1 Jan 2027/2028. The 1971 and 1982 batches leak at an elevated ~5%/y
+  since 2022 but no spike has been observed for them (yet). Background
+  hazard for all groups rose around 2022-23. Model: 
+  `scripts/batch_wave_hazard.py`.
 - **Spatial clustering is tight**: median nearest-neighbor distance
   between to-be-replaced pipe midpoints is 7.9 m (75th pct 13.6 m, long
   thin tail to 131 m) -- small/moderate-radius circles can plausibly sweep
@@ -204,6 +212,31 @@ workable:
   covered by >=1 circle, budget/year feasibility simulation) and keep it
   in sync in both languages, or pick one language as the source of truth
   for validation and document that choice here once made.
+
+## Shared outputs (schemas)
+
+- `data/processed/leak_risk_*.csv` (all risk models): `Pipe ID` (str),
+  `cost_if_leak` ($, expected cost given a leak), `p_leak_annual`
+  (10-year-average yearly probability, for the constant-hazard planner),
+  `p_2027` .. `p_2051` (P(leak in that calendar year | not leaked by its
+  start)). One row per pipe still non-polyurethane in 2027 (27,248).
+  `leak_risk_batchwave.csv` / `leak_risk_batchwave_extrap.csv` come from
+  `scripts/batch_wave_hazard.py` (`_extrap` = drifting spike also applied
+  to the 1966-1985 batches).
+- Planner: `scripts/build_plan.py --yearly` makes the planner use the
+  `p_YYYY` columns (time-aware expected score, Monte Carlo, and an LP
+  year-assignment ordering in `pipeplan.ordering.lp_order`); without
+  `--yearly` it behaves exactly as before (constant `p_leak_annual`).
+- `data/processed/plan_backtest_batchwave.csv`
+  (`scripts/plan_backtest_batchwave.py`): one row per cutoff x
+  `risk_model` (`w060` | `batchwave`) x `planner` (`const` | `yearly`);
+  `score`/`spend`/`leak_cost` ($) against the real leaks after the
+  cutoff, `score_expected_cost`/`leak_cost_expected_cost` (same leaks
+  valued at the cost model's expected cost), `n_leaks`, `vs_w060*`
+  (difference from the w060 pipeline at the same cutoff, $).
+- `data/processed/cross_evaluation_batchwave.csv`
+  (`scripts/cross_evaluate_plans.py`): one row per plan x risk world;
+  Monte Carlo mean/sd score, leak cost, spend, number of leaks ($).
 
 ## Python environment
 
