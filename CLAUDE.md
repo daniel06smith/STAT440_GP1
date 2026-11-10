@@ -299,8 +299,26 @@ not one-off scratch work:
   `submission_x03_leakaware_setcover40_c1.csv` = setcover40 with that cushion:
   +$1.34-1.55M vs `x03_leakaware` (+$0.24-0.27M vs setcover40) in all 4 worlds,
   wins 89-98%; exact integer-cm check: 0 of 26,245 iron pipes uncovered. **Current
-  best offline plan (not yet uploaded, 2026-11-09).** If an upload is ever
+  best offline plan; uploaded 2026-11-10: public $77.47M (+$2.05M vs
+  x03_leakaware's $75.42M, predicted +$1.34-1.55M) -- accepted, so coverage is fine.** If an upload is ever
   rejected for coverage, fall back to `submission_x03_leakaware_setcover40.csv`.
+  **Spend headroom test (2026-11-10, `scripts/spend_headroom.py`,
+  `data/processed/spend_headroom.json`)**: added ~806k candidates of three new
+  families the k-nearest growth cannot make (fixed-centre grid circles near
+  water/structure, farthest-end-point ordering, unions of pairs of current circles)
+  to the c1 circles and re-solved the cover exactly (8 min): fixed cost $82.78M ->
+  $82.66M, only **$0.12M (0.14%)** saved, mostly structure. Circle design is
+  converged; stop optimising it.
+  **Order hedge (2026-11-10, `scripts/reorder_plan.py`, `data/processed/compare_hedge.csv`)**:
+  the circles are world-independent, but the c1 ORDER bets on the x0.3 world. Same c1
+  circles re-ordered under survival mixtures of all_x0.3 and batchwave_s035
+  (`leak_risk_hedge_x03_s035_q{25,50,75}.csv`, q = weight on s035), paired heavy-tail
+  MC (150 draws) vs c1. `c1_hedge25`: -$0.08 / -$0.09 / -$0.22M in the three x0.3
+  worlds, +$0.74M (batchwave_s035), +$0.15M (batchwave), +$1.09M (w060). Max regret
+  across the 6 worlds: c1 $1.39M, hedge25 $0.30M, hedge50 $0.46M; hedge25 beats c1
+  in expectation unless P(x0.3-like world) > ~84%. **Final-candidate plan:
+  `submission/submission_c1_hedge25.csv`** (same circles/spend as c1, 0 uncovered,
+  finishes year 17 with no leaks).
 - **Circle design (original)**: heuristic spatial clustering (e.g. DBSCAN / greedy
   circle packing seeded from the ~8-14m nearest-neighbor spacing found
   in EDA, ordered by risk density) with local-search refinement on
