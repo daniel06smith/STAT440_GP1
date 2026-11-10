@@ -222,28 +222,88 @@ def sample_future(world: World, rng: np.random.Generator) -> np.ndarray:
     return t
 
 
-def monte_carlo(world: World, prep: Prepared, n_draws: int = 100, seed: int = 0, **kw) -> dict:
-    """Average ``simulate`` over randomly drawn futures. Leak cost is the model mean,
-    so the reported spread reflects *when* leaks happen, not how big each one is
-    (real leak sizes are heavy-tailed, so the real score is noisier than this)."""
+def empirical_cost_ratios(root=None) -> dict[int, np.ndarray]:
+    """Real 2019-2026 leak costs divided by their surface's mean cost, per surface code.
+
+    Each pool has mean exactly 1, so multiplying a pipe's model mean cost by a draw from its
+    surface's pool keeps the expected cost unchanged and adds the real heavy tail (the top 100
+    of 14,113 leaks are ~40% of all leak $). Using surface-only pools slightly overstates the
+    noise, since material/length explain a small part of the spread.
+    """
+    import pandas as pd
+
+    from .world import REPO_ROOT, SURFACES
+
+    root = REPO_ROOT if root is None else root
+    pipes = pd.read_csv(f"{root}/data/raw/pipes.csv", usecols=["Pipe ID", "Surface"])
+    leaks = pd.read_csv(f"{root}/data/raw/train.csv", usecols=["Pipe ID", "Cost"]).merge(pipes, on="Pipe ID")
+    return {SURFACES.index(s): (g["Cost"] / g["Cost"].mean()).to_numpy() for s, g in leaks.groupby("Surface")}
+
+
+def sample_costs(world: World, ratios: dict[int, np.ndarray], rng: np.random.Generator) -> np.ndarray:
+    """One heavy-tailed draw of every pipe's leak cost: model mean x a real cost ratio."""
+    code = np.log2(world.surf_bit).astype(np.int64)
+    mult = np.ones(world.n)
+    for c, pool in ratios.items():
+        m = code == c
+        mult[m] = rng.choice(pool, size=int(m.sum()))
+    return world.leak_cost * mult
+
+
+def monte_carlo(world: World, prep: Prepared, n_draws: int = 100, seed: int = 0,
+                cost_ratios: dict[int, np.ndarray] | None = None, keep_draws: bool = False, **kw) -> dict:
+    """Average ``simulate`` over randomly drawn futures.
+
+    cost_ratios=None: every leak costs the model mean, so the spread only reflects *when* leaks
+    happen and badly understates the real noise. Pass ``empirical_cost_ratios()`` to also draw how
+    big each leak is from the real cost distribution (same expected score, realistic spread).
+    The same seed gives the same futures for every plan (common random numbers), so per-draw
+    differences between two plans (keep_draws=True -> out["score_draws"]) are paired.
+    """
     rng = np.random.default_rng(seed)
     rows = []
     for _ in range(n_draws):
-        r = simulate(world, prep, sample_future(world, rng), **kw)
+        t = sample_future(world, rng)
+        cost = sample_costs(world, cost_ratios, rng) if cost_ratios is not None else None
+        r = simulate(world, prep, t, leak_cost=cost, **kw)
         rows.append((r["score"], r["spend"], r["leak_cost"], r["last_year"], r["n_leaks"]))
     a = np.array(rows)
     names = ["score", "spend", "leak_cost", "last_year", "n_leaks"]
     out = {f"{k}_mean": a[:, i].mean() for i, k in enumerate(names)}
     out.update({f"{k}_sd": a[:, i].std(ddof=1) for i, k in enumerate(names)})
+    out["score_p05"], out["score_p95"] = np.percentile(a[:, 0], [5, 95])
     out["n_draws"] = n_draws
+    if keep_draws:
+        out["score_draws"] = a[:, 0]
     return out
 
 
 # --------------------------------------------------------------------------
 # 3. Fast approximation (no random leaks affecting the timeline)
 # --------------------------------------------------------------------------
+def survival(world: World, idx: np.ndarray, years) -> np.ndarray:
+    """P(pipe has NOT leaked before the start of project year `years`) (scalar or per-pipe years)."""
+    y = np.clip(np.asarray(years, dtype=np.int64), 0, N_YEARS)
+    if world.time_varying:
+        return np.exp(-world.cum_hazard[idx, y])
+    return (1.0 - world.p_annual[idx]) ** y
+
+
+def expected_unit_cost(world: World, fixed: float, pipes: np.ndarray, year: int) -> float:
+    """Expected cost of a work unit run at the start of `year`, counting leaks before then.
+
+    A pipe that leaked first is polyurethane: no 200 $/m for it, and the unit is skipped for free
+    when every one of its pipes leaked.  E = F * P(some pipe still non-poly) + 200 * sum len * S_p(year).
+    """
+    if not len(pipes):
+        return 0.0
+    S = survival(world, pipes, year)
+    return float(fixed * -np.expm1(np.log1p(-np.minimum(S, 1 - 1e-15)).sum())
+                 + LINEAR_RATE * (world.length[pipes] * S).sum())
+
+
 def expected_score(world: World, prep: Prepared, annual_budget: float = ANNUAL_BUDGET,
-                   n_years: int = N_YEARS) -> dict:
+                   n_years: int = N_YEARS, leak_aware: bool = False) -> dict:
     """Expected score assuming pipes only leak *after* the timeline is fixed.
 
     1. Walk the circles in order; each non-poly pipe is replaced by the first
@@ -255,27 +315,48 @@ def expected_score(world: World, prep: Prepared, annual_budget: float = ANNUAL_B
        its expected leak cost is  K * P(leak in the first y years)  -- K * (1 - (1 - p)^y)
        for a constant risk, K * (1 - exp(-cum_hazard[y])) for a year-by-year risk;
        a pipe that is never replaced is exposed for all 25 years.
+
+    leak_aware=True: a circle's cost is its EXPECTED cost at its year (``expected_unit_cost``: pipes
+    that leaked first cost no 200 $/m, an all-leaked circle is skipped), and its year comes from the
+    cumulative expected spend. This matches the Monte Carlo (the default over-counts spend by ~$30M
+    for the batchwave plans). ``last_year_no_leaks`` is always the finishing year if NOTHING leaks,
+    i.e. the worst case for the 25-year rule.
     """
     replaced = np.zeros(world.n, dtype=bool)
     repl_year = np.full(world.n, float(n_years))
     cum = 0.0
+    cum_full = 0.0
     spend = 0.0
     year_of_circle = np.full(prep.n, -1, dtype=np.int64)
     new_len = np.zeros(prep.n)
+
+    def year_at(total):
+        return max(0, math.ceil(total / annual_budget - 1e-12) - 1)
+
     for j in range(prep.n):
         m = prep.members(j)
         new = m[world.nonpoly0[m] & ~replaced[m]]
         if len(new) == 0:
             continue  # skipped circle
-        cost = round(prep.fixed[j] + LINEAR_RATE * world.length[new].sum(), 2)
+        full = round(prep.fixed[j] + LINEAR_RATE * world.length[new].sum(), 2)
+        cum_full += full
+        if leak_aware:
+            y0 = year_at(cum + 1e-6)
+            cost = expected_unit_cost(world, prep.fixed[j], new, y0)
+            y = year_at(cum + cost)
+            if y != y0:
+                cost = expected_unit_cost(world, prep.fixed[j], new, y)
+        else:
+            cost = full
         cum += cost
         spend += cost
-        y = max(0, math.ceil(cum / annual_budget - 1e-12) - 1)
+        y = year_at(cum)
         year_of_circle[j] = y
         new_len[j] = world.length[new].sum()
         replaced[new] = True
         repl_year[new] = y
-    finished = year_of_circle.max() < n_years
+    last_year_no_leaks = year_at(cum_full)
+    finished = year_of_circle.max() < n_years and last_year_no_leaks < n_years
     exposure = np.minimum(repl_year, n_years)
     if world.time_varying:
         p_leak = world.leak_prob_by(exposure.astype(np.int64))
@@ -290,6 +371,7 @@ def expected_score(world: World, prep: Prepared, annual_budget: float = ANNUAL_B
         "leak_cost": exp_leak,
         "score": annual_budget * n_years - spend - exp_leak if feasible else -np.inf,
         "last_year": int(year_of_circle.max()),
+        "last_year_no_leaks": int(last_year_no_leaks),
         "year_of_circle": year_of_circle,
         "repl_year": repl_year,
         "n_circles_used": int((year_of_circle >= 0).sum()),

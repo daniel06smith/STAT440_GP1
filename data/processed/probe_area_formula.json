@@ -1,0 +1,31 @@
+{
+  "plan": "batchwave_corrected_leakaware",
+  "n_enlarged": 23,
+  "first_enlarged_position": 12441,
+  "n_circles": 13025,
+  "static_extra_area_corrected": 6107871.275945062,
+  "static_extra_area_original": 3231296.5531792664,
+  "surfaces_of_enlarged": {
+    "3": 3,
+    "7": 1,
+    "12": 2,
+    "20": 1,
+    "32": 16
+  },
+  "corrected": {
+    "pred_change_mean": -5985347.10894617,
+    "pred_change_sd": 96368.6638996802,
+    "pred_change_p05": -6075898.663752613,
+    "pred_change_p95": -5861173.332604014,
+    "last_year_no_leaks": 17,
+    "base_last_year_no_leaks": 17
+  },
+  "original": {
+    "pred_change_mean": -3208003.3524931883,
+    "pred_change_sd": 36224.35588375417,
+    "pred_change_p05": -3256229.167972607,
+    "pred_change_p95": -3158806.1037392267,
+    "last_year_no_leaks": 14,
+    "base_last_year_no_leaks": 13
+  }
+}

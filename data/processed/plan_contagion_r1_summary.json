@@ -1,0 +1,40 @@
+{
+  "tag": "contagion_r1",
+  "cost_formula": "corrected",
+  "risk_file": "leak_risk_contagion_r1.csv",
+  "risk_probability_horizon_years": 1.0,
+  "yearly_risk": true,
+  "leak_aware": true,
+  "monte_carlo_seed": 1,
+  "n_circles": 12946,
+  "independent_coverage": {
+    "n_required": 26245,
+    "n_uncovered": 0,
+    "min_margin_m": 0.05000000000000071
+  },
+  "expected": {
+    "feasible": true,
+    "spend": 150145813.39489496,
+    "surplus": 99854186.60510504,
+    "leak_cost": 36935334.67018226,
+    "score": 62918851.934922785,
+    "last_year": 15,
+    "last_year_no_leaks": 17
+  },
+  "monte_carlo_20_draws": {
+    "score_mean": 62923263.68757452,
+    "spend_mean": 149851570.72450036,
+    "leak_cost_mean": 37225165.58792515,
+    "last_year_mean": 14.4,
+    "n_leaks_mean": 3149.75,
+    "score_sd": 1201887.0043050973,
+    "spend_sd": 508952.2566372846,
+    "leak_cost_sd": 1263574.6898750884,
+    "last_year_sd": 0.5026246899500346,
+    "n_leaks_sd": 46.18484030159908,
+    "score_p05": 61008656.234608844,
+    "score_p95": 64967116.565328516,
+    "n_draws": 20
+  },
+  "seconds": 64.7
+}

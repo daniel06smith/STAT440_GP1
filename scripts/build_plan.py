@@ -54,13 +54,29 @@ ap.add_argument(
     default=None,
     help="Monte Carlo seed; omit for a fresh random seed on each run",
 )
+ap.add_argument("--h-opt", type=float, default=None,
+                help="years of avoided leaks an optional copper/brass pipe must pay for itself in (default 12; ~0 = iron only)")
+ap.add_argument("--no-time-aware", action="store_true", help="merge circles on spend only (no delay penalty)")
+ap.add_argument("--k-neigh", type=int, default=None, help="merge partners per circle per round (default 8)")
+ap.add_argument("--leak-aware", action="store_true",
+                help="order circles with the expected cost that credits pipes leaking before their circle runs "
+                     "(needs --yearly); see pipeplan/ordering.py")
 args = ap.parse_args()
+if args.leak_aware and not args.yearly:
+    ap.error("--leak-aware needs --yearly")
 
 t0 = time.time()
 simulator.set_cost_formula(args.formula)
 risk = read_risk_csv(args.risk_csv, args.id_col, args.p_col, args.cost_col, args.horizon_years, yearly=args.yearly)
 world = load_world(risk=risk)
-res = build_plan(world, Params(verbose=True))
+pkw = {}
+if args.h_opt is not None:
+    pkw["h_opt"] = args.h_opt
+if args.no_time_aware:
+    pkw["time_aware"] = False
+if args.k_neigh is not None:
+    pkw["k_neigh"] = args.k_neigh
+res = build_plan(world, Params(verbose=True, **pkw), leak_aware=args.leak_aware)
 prep = res["prep"]
 
 sub_path = ROOT / "submission" / f"submission_{args.tag}.csv"
@@ -70,7 +86,7 @@ write_submission(prep.circles, sub_path)
 circles_from_file = read_submission(sub_path)
 cov = independent_coverage_check(world, circles_from_file)
 prep_file = prepare(world, circles_from_file)
-ex = expected_score(world, prep_file)
+ex = expected_score(world, prep_file, leak_aware=args.leak_aware)
 mc = monte_carlo(world, prep_file, n_draws=args.mc_draws, seed=args.mc_seed)
 
 table = circle_table(world, prep_file)
@@ -82,13 +98,17 @@ summary = {
     "risk_file": str(Path(args.risk_csv).name),
     "risk_probability_horizon_years": args.horizon_years,
     "yearly_risk": args.yearly,
+    "leak_aware": args.leak_aware,
+    "builder_params": pkw,
     "monte_carlo_seed": args.mc_seed,
     "n_circles": int(len(circles_from_file)),
     "independent_coverage": {k: v for k, v in cov.items() if k != "uncovered_ids"},
-    "expected": {k: ex[k] for k in ("feasible", "spend", "surplus", "leak_cost", "score", "last_year")},
+    "expected": {k: ex[k] for k in ("feasible", "spend", "surplus", "leak_cost", "score", "last_year",
+                                    "last_year_no_leaks")},
     f"monte_carlo_{args.mc_draws}_draws": mc,
     "seconds": round(time.time() - t0, 1),
 }
 (ROOT / f"data/processed/plan_{args.tag}_summary.json").write_text(json.dumps(summary, indent=2, default=float))
 print(json.dumps(summary, indent=2, default=float))
 assert cov["n_uncovered"] == 0, "some iron pipe is not covered!"
+assert ex["last_year_no_leaks"] < 25, "plan would not finish in 25 years if nothing leaked!"

@@ -17,20 +17,24 @@ from .simulator import Prepared, expected_score, prepare
 from .world import LINEAR_RATE, World
 
 
-def build_plan(world: World, params: Params | None = None, order_iters: int = 8, verbose: bool = True) -> dict:
-    """Construct circles, order them, drop skipped ones. Returns everything needed downstream."""
+def build_plan(world: World, params: Params | None = None, order_iters: int = 8, verbose: bool = True,
+               leak_aware: bool = False) -> dict:
+    """Construct circles, order them, drop skipped ones. Returns everything needed downstream.
+
+    leak_aware: order (and pick between orders) with the expected cost that credits pipes leaking
+    before their circle runs (see ordering.py). Circle construction is unchanged."""
     builder = Builder(world, params or Params(verbose=verbose)).run()
     prep0 = prepare(world, builder.circles())
-    ordered, log = smith_order(world, prep0, iters=order_iters, verbose=verbose)
+    ordered, log = smith_order(world, prep0, iters=order_iters, verbose=verbose, leak_aware=leak_aware)
     if world.time_varying:
         # Smith's rule can strand circles behind their pipes' leak spike; solve the year assignment
         # as an LP (twice: the second pass uses the first-cover pattern of the first LP order) and
         # keep whichever order has the best expected score.
-        best, best_score = ordered, expected_score(world, ordered)["score"]
+        best, best_score = ordered, expected_score(world, ordered, leak_aware=leak_aware)["score"]
         cur = ordered
         for k in range(2):
-            cur = lp_order(world, cur, verbose=verbose)
-            sc = expected_score(world, cur)["score"]
+            cur = lp_order(world, cur, verbose=verbose, leak_aware=leak_aware)
+            sc = expected_score(world, cur, leak_aware=leak_aware)["score"]
             log.append({"iter": f"lp{k}", "score": sc})
             if verbose:
                 print(f"LP order pass {k}: expected score ${sc:,.0f}")
