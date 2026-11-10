@@ -384,6 +384,45 @@ def test_contagion_simulator_without_triggers_matches_simulate():
     assert abs(c["spend"] - cost_by_hand(3, 5.02, 10)) < 0.02  # only P0's circle is paid
 
 
+# ---------------------------------------------------------------- set cover construction
+def _setcover_plan(w):
+    from pipeplan import setcover
+    from pipeplan.construct import Params
+
+    return setcover.build_circles(w, Params(verbose=False, h_opt=0.001), k_max=5, same_surface_k=5, r_max=100,
+                                  verbose=False)
+
+
+def test_setcover_merges_parallel_pipes_into_one_circle():
+    simulator.set_cost_formula("corrected")
+    try:
+        # three parallel 10 m grass pipes 1 m apart: one circle (r ~5.1) beats three (r ~5 each)
+        w = make_world([(f"P{i}", "cast iron", "grassland", 0, i, 10, i) for i in range(3)])
+        circles = _setcover_plan(w)
+        prep = prepare(w, circles)
+        assert prep.covers_all_iron and len(circles) == 1
+    finally:
+        simulator.set_cost_formula("original")
+
+
+def test_setcover_keeps_an_expensive_surface_out_of_the_circle():
+    simulator.set_cost_formula("corrected")
+    try:
+        # two grass iron pipes with an (already polyurethane) structure pipe between them: one circle around all
+        # three would pay 3 + 50 $/m^2, so two separate grass circles are cheaper
+        w = make_world([
+            ("A", "cast iron", "grassland", 0, 0, 10, 0),
+            ("S", "polyurethane", "structure", 0, 1, 10, 1),
+            ("B", "cast iron", "grassland", 0, 2, 10, 2),
+        ])
+        circles = _setcover_plan(w)
+        prep = prepare(w, circles)
+        assert prep.covers_all_iron and len(circles) == 2
+        assert (prep.surface_rate == 3).all()
+    finally:
+        simulator.set_cost_formula("original")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

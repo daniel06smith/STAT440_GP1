@@ -61,6 +61,14 @@ ap.add_argument("--k-neigh", type=int, default=None, help="merge partners per ci
 ap.add_argument("--leak-aware", action="store_true",
                 help="order circles with the expected cost that credits pipes leaking before their circle runs "
                      "(needs --yearly); see pipeplan/ordering.py")
+ap.add_argument("--construct", choices=["merge", "setcover"], default="merge",
+                help="circle construction: pairwise merging (construct.Builder, default) or set cover + MILP "
+                     "(pipeplan.setcover; ignores timing when choosing circles, ordering is unchanged)")
+ap.add_argument("--sc-k", type=int, default=25, help="setcover: nearest target pipes per candidate group")
+ap.add_argument("--sc-same-k", type=int, default=25, help="setcover: same-surface nearest pipes per group (0 = off)")
+ap.add_argument("--sc-rmax", type=float, default=150.0, help="setcover: largest candidate radius (m)")
+ap.add_argument("--sc-seed-plans", nargs="*", default=[],
+                help="setcover: submission tags whose circles are added as candidates (cover can only get cheaper)")
 args = ap.parse_args()
 if args.leak_aware and not args.yearly:
     ap.error("--leak-aware needs --yearly")
@@ -76,8 +84,21 @@ if args.no_time_aware:
     pkw["time_aware"] = False
 if args.k_neigh is not None:
     pkw["k_neigh"] = args.k_neigh
-res = build_plan(world, Params(verbose=True, **pkw), leak_aware=args.leak_aware)
-prep = res["prep"]
+if args.construct == "merge":
+    res = build_plan(world, Params(verbose=True, **pkw), leak_aware=args.leak_aware)
+    prep = res["prep"]
+else:
+    import numpy as np  # noqa: E402
+    from pipeplan import setcover  # noqa: E402
+    from pipeplan.pipeline import order_plan  # noqa: E402
+
+    extra = [read_submission(ROOT / "submission" / f"submission_{t}.csv") for t in args.sc_seed_plans]
+    circles = setcover.build_circles(world, Params(verbose=False, **pkw), k_max=args.sc_k,
+                                     same_surface_k=args.sc_same_k, r_max=args.sc_rmax,
+                                     extra_circles=np.vstack(extra) if extra else None)
+    prep, _ = order_plan(world, prepare(world, circles), leak_aware=args.leak_aware)
+    pkw.update(construct="setcover", sc_k=args.sc_k, sc_same_k=args.sc_same_k, sc_rmax=args.sc_rmax,
+               sc_seed_plans=args.sc_seed_plans)
 
 sub_path = ROOT / "submission" / f"submission_{args.tag}.csv"
 write_submission(prep.circles, sub_path)

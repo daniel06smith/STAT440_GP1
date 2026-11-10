@@ -25,6 +25,14 @@ def build_plan(world: World, params: Params | None = None, order_iters: int = 8,
     before their circle runs (see ordering.py). Circle construction is unchanged."""
     builder = Builder(world, params or Params(verbose=verbose)).run()
     prep0 = prepare(world, builder.circles())
+    final, log = order_plan(world, prep0, order_iters=order_iters, verbose=verbose, leak_aware=leak_aware)
+    return {"builder": builder, "prep_unordered": prep0, "prep": final, "order_log": log}
+
+
+def order_plan(world: World, prep0: Prepared, order_iters: int = 8, verbose: bool = True,
+               leak_aware: bool = False) -> tuple[Prepared, list]:
+    """Order a set of circles (Smith's rule, then the LP year assignment when the risk is yearly)
+    and drop circles that end up skipped. Returns (Prepared in execution order, log)."""
     ordered, log = smith_order(world, prep0, iters=order_iters, verbose=verbose, leak_aware=leak_aware)
     if world.time_varying:
         # Smith's rule can strand circles behind their pipes' leak spike; solve the year assignment
@@ -41,8 +49,7 @@ def build_plan(world: World, params: Params | None = None, order_iters: int = 8,
             if sc > best_score:
                 best, best_score = cur, sc
         ordered = best
-    final = drop_redundant(world, ordered)
-    return {"builder": builder, "prep_unordered": prep0, "prep": final, "order_log": log}
+    return drop_redundant(world, ordered), log
 
 
 # ------------------------------------------------------------------ outputs
@@ -133,6 +140,6 @@ def surface_summary(world: World, prep: Prepared) -> pd.DataFrame:
 
 
 __all__ = [
-    "build_plan", "circle_table", "write_submission", "read_submission",
+    "build_plan", "order_plan", "circle_table", "write_submission", "read_submission",
     "independent_coverage_check", "surface_summary",
 ]

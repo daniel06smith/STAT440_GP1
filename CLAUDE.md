@@ -274,7 +274,21 @@ not one-off scratch work:
   empirical tables from `notebooks/02_eda_python.ipynb` should still be
   used as a validation baseline the fitted model is expected to
   reproduce.
-- **Circle design**: heuristic spatial clustering (e.g. DBSCAN / greedy
+- **Circle design, set cover (2026-11-09)**: `scripts/build_plan.py --construct
+  setcover` (`pipeplan.setcover`) replaces pairwise merging with ~435k candidate
+  circles (each target pipe + its 1..25 nearest targets, again with same-surface
+  neighbours only, plus every circle of `--sc-seed-plans`) and an exact HiGHS set
+  cover on fixed cost (`100 + area term + swallowed copper/brass`). Area+fee cost
+  $84.71M -> $83.35M; ordering unchanged (leak cost +$0.06M). Paired heavy-tail
+  MC vs `x03_leakaware`: +$0.94-1.05M in all_x0.3, both w1965_off worlds and
+  batchwave_s035 (wins 83-97%). File: `submission_x03_leakaware_setcover.csv`.
+  Bigger pool (`--sc-k 40 --sc-same-k 40 --sc-rmax 200`, seeded with both
+  plans; ~660k candidates) saves another ~$0.3M: `submission_x03_leakaware_setcover40.csv`,
+  +$1.09-1.29M vs `x03_leakaware` in the same 4 worlds (wins 87-97%). Current best
+  offline plan (not yet uploaded as of 2026-11-09). Paired results:
+  `data/processed/compare_setcover.csv`.
+  Timing is ignored when choosing circles (ordering still is time-aware).
+- **Circle design (original)**: heuristic spatial clustering (e.g. DBSCAN / greedy
   circle packing seeded from the ~8-14m nearest-neighbor spacing found
   in EDA, ordered by risk density) with local-search refinement on
   radius/center, rather than an exact formal optimization. Reason: the
