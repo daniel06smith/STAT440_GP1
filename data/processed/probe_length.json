@@ -1,0 +1,23 @@
+{
+ "plan": "batchwave_corrected_leakaware",
+ "n_added": 505,
+ "added_length_charge": 3006053.2939172927,
+ "added_fees_area": 3867634.0492138816,
+ "mean_p_still_nonpoly": 0.7180874419736524,
+ "static_pred_if_200_per_m": -4776786.099794968,
+ "static_pred_if_no_length_charge": -2680878.015906064,
+ "worlds": {
+  "independent, spike x0.35": {
+   "pred_change_mean_M": -4.45778556684479,
+   "sd_M": 0.38753818575792537,
+   "p05_M": -4.910978728161535,
+   "p95_M": -3.689122577401992
+  },
+  "w060 ensemble": {
+   "pred_change_mean_M": -5.161875957632368,
+   "sd_M": 0.4577282097496263,
+   "p05_M": -5.651393454289176,
+   "p95_M": -4.212185993426921
+  }
+ }
+}

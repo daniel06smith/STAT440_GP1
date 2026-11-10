@@ -1,0 +1,36 @@
+{
+  "tag": "batchwave",
+  "cost_formula": "original",
+  "risk_file": "leak_risk_batchwave.csv",
+  "risk_probability_horizon_years": 1.0,
+  "yearly_risk": true,
+  "monte_carlo_seed": 1,
+  "n_circles": 12674,
+  "independent_coverage": {
+    "n_required": 26245,
+    "n_uncovered": 0,
+    "min_margin_m": 0.04999999999999982
+  },
+  "expected": {
+    "feasible": true,
+    "spend": 139656178.47999996,
+    "surplus": 110343821.52000004,
+    "leak_cost": 43147811.007456765,
+    "score": 67196010.51254328,
+    "last_year": 13
+  },
+  "monte_carlo_200_draws": {
+    "score_mean": 91172442.82463787,
+    "spend_mean": 116819736.45479994,
+    "leak_cost_mean": 42007820.7205622,
+    "last_year_mean": 11.0,
+    "n_leaks_mean": 3919.045,
+    "score_sd": 1164221.8656410282,
+    "spend_sd": 406859.4878594366,
+    "leak_cost_sd": 1265839.8015898967,
+    "last_year_sd": 0.0,
+    "n_leaks_sd": 43.42616878885809,
+    "n_draws": 200
+  },
+  "seconds": 187.2
+}

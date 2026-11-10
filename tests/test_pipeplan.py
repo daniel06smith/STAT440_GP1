@@ -180,6 +180,19 @@ def test_expected_score_matches_monte_carlo_when_budget_is_loose():
     assert mc["spend_mean"] <= ex["spend"] + 1e-6
 
 
+def test_heavy_tailed_costs_keep_the_mean_and_widen_the_spread():
+    w = three_pipe_world()
+    prep = prepare(w, np.array([[1000 * i + 5, 0, 5.02] for i in range(3)]))
+    kw = dict(annual_budget=3000, n_years=6)
+    code = int(np.log2(w.surf_bit[0]))
+    ratios = {code: np.array([0.1] * 9 + [9.1])}  # mean 1, one leak in ten is 9x the mean
+    flat = monte_carlo(w, prep, n_draws=20000, seed=3, **kw)
+    tail = monte_carlo(w, prep, n_draws=20000, seed=3, cost_ratios=ratios, keep_draws=True, **kw)
+    assert abs(tail["leak_cost_mean"] - flat["leak_cost_mean"]) < 0.1 * flat["leak_cost_mean"]
+    assert tail["score_sd"] > 2 * flat["score_sd"]
+    assert len(tail["score_draws"]) == 20000
+
+
 def test_sampled_leak_times_follow_the_annual_probability():
     w = three_pipe_world()
     rng = np.random.default_rng(0)
@@ -222,6 +235,192 @@ def test_zero_leak_probability_is_allowed_but_missing_is_not():
         pass
     else:
         raise AssertionError("a missing risk estimate must raise")
+
+
+# ------------------------------------------------------- year-by-year leak risk
+def _yearly_risk(ids, p_by_year, cost=1000.0):
+    """p_by_year: (len(ids), 25) array of P(leak in project year k | not leaked yet)."""
+    df = pd.DataFrame({"Pipe ID": ids, "p_annual": p_by_year[:, :10].mean(axis=1), "leak_cost": cost})
+    for k in range(25):
+        df[f"py_{k}"] = p_by_year[:, k]
+    return df
+
+
+def test_constant_yearly_risk_reproduces_constant_model():
+    rows = [(f"P{i}", "cast iron", "grassland", 1000 * i, 0, 1000 * i + 10, 0) for i in range(3)]
+    ids = [r[0] for r in rows]
+    w_const = make_world(rows)
+    w_year = make_world(rows, risk=_yearly_risk(ids, np.full((3, 25), 0.1)))
+    assert w_year.time_varying and not w_const.time_varying
+    assert np.allclose(w_const.cum_hazard, w_year.cum_hazard)
+    prep = prepare(w_const, np.array([[1000 * i + 5, 0, 5.02] for i in range(3)]))
+    kw = dict(annual_budget=3000, n_years=6)
+    assert abs(expected_score(w_const, prep, **kw)["leak_cost"] - expected_score(w_year, prep, **kw)["leak_cost"]) < 1e-9
+
+
+def test_expected_score_uses_the_yearly_risk_of_the_replacement_year():
+    # P0 never leaks; P1 is safe in year 0 and leaks with prob 0.9 in year 1.
+    rows = [(f"P{i}", "cast iron", "grassland", 1000 * i, 0, 1000 * i + 10, 0) for i in range(2)]
+    P = np.zeros((2, 25))
+    P[1, 1] = 0.9
+    w = make_world(rows, risk=_yearly_risk(["P0", "P1"], P))
+    prep = prepare(w, np.array([[5, 0, 5.02], [1005, 0, 5.02]]))  # each circle costs ~2.2k
+    # budget 2500/yr -> P1 runs at the start of year 1, before its risky year: no expected leak
+    ex = expected_score(w, prep, annual_budget=2500, n_years=25)
+    assert ex["repl_year"][1] == 1 and ex["leak_cost"] == 0.0
+    # budget 1200/yr -> P1 runs at the start of year 3, after its risky year: 0.9 * 1000
+    ex_late = expected_score(w, prep, annual_budget=1200, n_years=25)
+    assert ex_late["repl_year"][1] == 3 and abs(ex_late["leak_cost"] - 900.0) < 1e-6
+
+
+def test_sampled_leak_times_follow_the_yearly_probability():
+    rows = [("A", "cast iron", "grassland", 0, 0, 10, 0)]
+    P = np.full((1, 25), 0.02)
+    P[0, 3] = 0.5  # a spike in project year 3
+    w = make_world(rows, risk=_yearly_risk(["A"], P))
+    rng = np.random.default_rng(0)
+    t = np.array([sample_future(w, rng)[0] for _ in range(40000)])
+    surv3 = 0.98 ** 3
+    assert abs((t < 3).mean() - (1 - surv3)) < 0.01
+    assert abs(((t >= 3) & (t < 4)).mean() - surv3 * 0.5) < 0.01
+    assert abs((t < 25).mean() - (1 - 0.98 ** 24 * 0.5)) < 0.01
+
+
+def test_ordering_puts_a_spiking_pipe_first():
+    from pipeplan.ordering import smith_order
+    rows = [(f"P{i}", "cast iron", "grassland", 1000 * i, 0, 1000 * i + 10, 0) for i in range(2)]
+    P = np.full((2, 25), 0.01)
+    P[1, 0] = 0.6  # P1 spikes right now, P0 never does
+    w = make_world(rows, risk=_yearly_risk(["P0", "P1"], P))
+    prep = prepare(w, np.array([[5, 0, 5.02], [1005, 0, 5.02]]))
+    best, _ = smith_order(w, prep, iters=2, verbose=False)
+    assert best.circles[0, 0] == 1005
+
+
+def test_lp_order_replaces_each_pipe_before_its_spike():
+    from pipeplan.ordering import lp_order
+    ids = ["A", "B", "C"]
+    rows = [(k, "cast iron", "grassland", 1000 * i, 0, 1000 * i + 10, 0) for i, k in enumerate(ids)]
+    P = np.zeros((3, 25))
+    P[0, 0], P[1, 1], P[2, 2] = 0.9, 0.9, 0.9  # A spikes in year 0, B in year 1, C in year 2
+    w = make_world(rows, risk=_yearly_risk(ids, P))
+    # listed in the worst order; budget pays for exactly one circle (~2.2k) per year
+    prep = prepare(w, np.array([[2005, 0, 5.02], [1005, 0, 5.02], [5, 0, 5.02]]))
+    assert abs(expected_score(w, prep, annual_budget=2300)["leak_cost"] - 900.0) < 1e-6  # A waits to year 2
+    best = lp_order(w, prep, annual_budget=2300, verbose=False)
+    assert list(best.circles[:, 0]) == [5, 1005, 2005]
+    assert expected_score(w, best, annual_budget=2300)["leak_cost"] == 0.0
+
+
+def test_leak_aware_expected_score_matches_monte_carlo():
+    # P1 leaks in year 0 with prob 0.4; its circle always runs at the start of year 1 (budget 2300,
+    # P0's circle uses ~2204 of year 0). If P1 leaked first, its circle is skipped for free.
+    rows = [(f"P{i}", "cast iron", "grassland", 1000 * i, 0, 1000 * i + 10, 0) for i in range(2)]
+    P = np.zeros((2, 25))
+    P[1, 0] = 0.4
+    w = make_world(rows, risk=_yearly_risk(["P0", "P1"], P))
+    prep = prepare(w, np.array([[5, 0, 5.02], [1005, 0, 5.02]]))
+    kw = dict(annual_budget=2300, n_years=25)
+    full = cost_by_hand(3, 5.02, 10) if simulator.COST_FORMULA == "original" else None
+    plain = expected_score(w, prep, **kw)
+    aware = expected_score(w, prep, leak_aware=True, **kw)
+    assert abs(plain["spend"] - 2 * full) < 0.02
+    assert abs(aware["spend"] - (full + 0.6 * full)) < 0.02  # P1's circle runs only if P1 did not leak
+    assert abs(aware["leak_cost"] - 400.0) < 1e-6 and aware["last_year_no_leaks"] == 1
+    mc = monte_carlo(w, prep, n_draws=20000, seed=5, **kw)
+    assert abs(mc["spend_mean"] - aware["spend"]) < 0.01 * aware["spend"]
+    assert abs(mc["leak_cost_mean"] - aware["leak_cost"]) < 15
+
+
+def test_leak_aware_lp_lets_a_pipe_that_is_cheaper_to_leak_wait():
+    # A spikes in year 0 (P = 0.9) and its leak costs 1500 -- but replacing it costs ~2204, so
+    # letting it leak is CHEAPER. B never leaks. The budget pays for one circle per year.
+    # Plain LP replaces A first (it only sees leak cost); the leak-aware LP runs B first and lets A
+    # wait: expected 0.9 * 1500 + 0.1 * 2204 ~ 1570 instead of 2204.
+    from pipeplan.ordering import lp_order
+    rows = [("A", "cast iron", "grassland", 0, 0, 10, 0), ("B", "cast iron", "grassland", 1000, 0, 1010, 0)]
+    P = np.zeros((2, 25))
+    P[0, 0] = 0.9
+    w = make_world(rows, risk=_yearly_risk(["A", "B"], P, cost=1500.0))
+    prep = prepare(w, np.array([[1005, 0, 5.02], [5, 0, 5.02]]))
+    plain = lp_order(w, prep, annual_budget=2300, verbose=False)
+    aware = lp_order(w, prep, annual_budget=2300, verbose=False, leak_aware=True)
+    assert list(plain.circles[:, 0]) == [5, 1005]
+    assert list(aware.circles[:, 0]) == [1005, 5]
+    s_plain = expected_score(w, plain, annual_budget=2300, leak_aware=True)["score"]
+    s_aware = expected_score(w, aware, annual_budget=2300, leak_aware=True)["score"]
+    assert s_aware > s_plain
+    # and the exact simulator agrees
+    mc_plain = monte_carlo(w, plain, n_draws=4000, seed=1, annual_budget=2300)["score_mean"]
+    mc_aware = monte_carlo(w, aware, n_draws=4000, seed=1, annual_budget=2300)["score_mean"]
+    assert mc_aware > mc_plain
+
+
+def test_contagion_simulator_without_triggers_matches_simulate():
+    # with a zero trigger kernel, the event simulator must reproduce simulate() exactly
+    from pipeplan import contagion as ct
+    from pipeplan.contagion_sim import ContagionWorld, simulate_events
+    rows = [(f"P{i}", "cast iron", "grassland", 1000 * i, 0, 1000 * i + 10, 0) for i in range(3)]
+    w = three_pipe_world()
+    prep = prepare(w, np.array([[1000 * i + 5, 0, 5.02] for i in range(3)]))
+    pipes = pd.DataFrame(rows, columns=["Pipe ID", "Material", "Surface", "GPS x1", "GPS y1", "GPS x2", "GPS y2"])
+    pipes["Lay date"] = pd.Timestamp("1960-06-01")
+    k = len(ct.MATS)
+    zero = ct.TriggerModel(ct.Kernel(np.zeros((len(ct.E_BINS) - 1, 2)), None, None), 0.0, np.zeros(k), np.zeros(6),
+                           np.zeros(6), np.zeros(k), np.zeros(6), 0.0, 0.0, 0.0)
+    cw = ContagionWorld(w, zero, pipes=pipes)
+    t = np.array([0.5, 1.5, np.inf])  # P0 leaks in year 0 (replaced at its start -> no leak), P1 in year 1
+    a = simulate(w, prep, t, annual_budget=3000, n_years=6)
+    b = simulate_events(w, prep, cw, t, w.leak_cost, np.random.default_rng(0), annual_budget=3000, n_years=6)
+    assert abs(a["score"] - b["score"]) < 1e-6 and abs(a["spend"] - b["spend"]) < 1e-6
+    # a certain trigger (q = 1 at every distance): P1 leaks in year 0, before its circle runs in year 1, and drags
+    # P2 (still non-poly; P0 was replaced at the start of year 0) with it -> both later circles are skipped for free
+    one = ct.TriggerModel(ct.Kernel(np.ones((len(ct.E_BINS) - 1, 2)), None, None), 0.0, np.zeros(k), np.zeros(6),
+                          np.zeros(6), np.zeros(k), np.zeros(6), 0.0, 0.0, 0.0)
+    t2 = np.array([np.inf, 0.5, np.inf])
+    c = simulate_events(w, prep, ContagionWorld(w, one, pipes=pipes), t2, w.leak_cost, np.random.default_rng(0),
+                        annual_budget=3000, n_years=6)
+    assert c["n_primary"] == 1 and c["n_victims"] == 1 and c["leak_cost"] == 2000.0
+    assert abs(c["spend"] - cost_by_hand(3, 5.02, 10)) < 0.02  # only P0's circle is paid
+
+
+# ---------------------------------------------------------------- set cover construction
+def _setcover_plan(w):
+    from pipeplan import setcover
+    from pipeplan.construct import Params
+
+    return setcover.build_circles(w, Params(verbose=False, h_opt=0.001), k_max=5, same_surface_k=5, r_max=100,
+                                  verbose=False)
+
+
+def test_setcover_merges_parallel_pipes_into_one_circle():
+    simulator.set_cost_formula("corrected")
+    try:
+        # three parallel 10 m grass pipes 1 m apart: one circle (r ~5.1) beats three (r ~5 each)
+        w = make_world([(f"P{i}", "cast iron", "grassland", 0, i, 10, i) for i in range(3)])
+        circles = _setcover_plan(w)
+        prep = prepare(w, circles)
+        assert prep.covers_all_iron and len(circles) == 1
+    finally:
+        simulator.set_cost_formula("original")
+
+
+def test_setcover_keeps_an_expensive_surface_out_of_the_circle():
+    simulator.set_cost_formula("corrected")
+    try:
+        # two grass iron pipes with an (already polyurethane) structure pipe between them: one circle around all
+        # three would pay 3 + 50 $/m^2, so two separate grass circles are cheaper
+        w = make_world([
+            ("A", "cast iron", "grassland", 0, 0, 10, 0),
+            ("S", "polyurethane", "structure", 0, 1, 10, 1),
+            ("B", "cast iron", "grassland", 0, 2, 10, 2),
+        ])
+        circles = _setcover_plan(w)
+        prep = prepare(w, circles)
+        assert prep.covers_all_iron and len(circles) == 2
+        assert (prep.surface_rate == 3).all()
+    finally:
+        simulator.set_cost_formula("original")
 
 
 if __name__ == "__main__":

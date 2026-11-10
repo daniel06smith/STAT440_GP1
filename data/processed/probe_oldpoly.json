@@ -1,0 +1,37 @@
+{
+  "plan": "batchwave_corrected_leakaware",
+  "n_enlarged": 90,
+  "first_enlarged_position": 10034,
+  "n_circles": 13025,
+  "static_extra_area_corrected": 6027336.073650235,
+  "static_extra_area_original": 3475838.3043898293,
+  "surfaces_of_enlarged": {
+    "3": 27,
+    "7": 10,
+    "32": 52,
+    "35": 1
+  },
+  "corrected": {
+    "pred_change_mean": -5076776.482996809,
+    "pred_change_sd": 237378.44753151605,
+    "pred_change_p05": -5436512.694868797,
+    "pred_change_p95": -4643761.430627442,
+    "last_year_no_leaks": 17,
+    "base_last_year_no_leaks": 17
+  },
+  "original": {
+    "pred_change_mean": -3071586.880312638,
+    "pred_change_sd": 133466.1296152104,
+    "pred_change_p05": -3289744.3968162118,
+    "pred_change_p95": -2872826.8736762204,
+    "last_year_no_leaks": 14,
+    "base_last_year_no_leaks": 13
+  },
+  "old_probe": {
+    "n_circles": 90,
+    "mean_dF_corrected": 66970.40081833593,
+    "mean_p_pipe_leaked_before_its_circle": 0.12492445730836076,
+    "pred_change_if_none_secretly_poly": -5277842.385177142,
+    "how_to_read": "change = -(sum dF over executed circles); share still iron ~= change / pred_change_if_none_secretly_poly"
+  }
+}

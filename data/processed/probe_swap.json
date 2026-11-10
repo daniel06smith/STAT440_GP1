@@ -1,0 +1,99 @@
+{
+ "blocks": {
+  "B0 (now 2027 -> 2028)": {
+   "circles": 1009,
+   "pipes": 2513,
+   "full_cost": 9990651.542535448,
+   "expected_2027_leaks_if_unreplaced (batchwave)": 912.785262563498,
+   "expected_2027_leak_cost_if_unreplaced (batchwave)": 51426157.7432018,
+   "top_batches (pipes, expected 2027 leaks)": {
+    "1965 wrought iron": [
+     966,
+     501.1
+    ],
+    "1964 wrought iron": [
+     507,
+     271.0
+    ],
+    "1965 gray iron": [
+     133,
+     84.4
+    ],
+    "1965 cast iron": [
+     51,
+     33.2
+    ],
+    "1963 wrought iron": [
+     30,
+     4.9
+    ]
+   }
+  },
+  "B1 (now 2028 -> 2027)": {
+   "circles": 1003,
+   "pipes": 2173,
+   "full_cost": 9995882.90854273,
+   "expected_2027_leaks_if_unreplaced (batchwave)": 408.68639458853175,
+   "expected_2027_leak_cost_if_unreplaced (batchwave)": 5584269.376730945,
+   "top_batches (pipes, expected 2027 leaks)": {
+    "1965 wrought iron": [
+     772,
+     380.6
+    ],
+    "1971 cast iron": [
+     97,
+     5.2
+    ],
+    "1948 wrought iron": [
+     310,
+     3.9
+    ],
+    "1982 cast iron": [
+     72,
+     3.1
+    ],
+    "1949 wrought iron": [
+     168,
+     2.1
+    ]
+   }
+  }
+ },
+ "worlds": {
+  "batchwave": {
+   "pred_change_mean_M": -42.44378974408479,
+   "sd_M": 7.932227564136248,
+   "p05_M": -55.48144811457214,
+   "p95_M": -31.16165533150471,
+   "base_score_mean_M": 58.50578570643826
+  },
+  "batchwave + triggered leaks": {
+   "pred_change_mean_M": -36.43099531065725,
+   "sd_M": 7.3498036970826215,
+   "p05_M": -49.441293568064374,
+   "p95_M": -25.871269596918694,
+   "base_score_mean_M": 61.04729179732188
+  },
+  "batchwave_batch (1965 wrought later)": {
+   "pred_change_mean_M": -50.1062101505346,
+   "sd_M": 8.812771971895788,
+   "p05_M": -62.01350808411425,
+   "p95_M": -36.11453573117692,
+   "base_score_mean_M": 59.020175274753804
+  },
+  "batchwave_extrap": {
+   "pred_change_mean_M": -42.40431299483437,
+   "sd_M": 7.916053276863825,
+   "p05_M": -55.51726390534411,
+   "p95_M": -31.221525941292498,
+   "base_score_mean_M": 59.88836548673602
+  },
+  "w060 ensemble": {
+   "pred_change_mean_M": -21.083776799152893,
+   "sd_M": 6.135426068540112,
+   "p05_M": -33.19074994724525,
+   "p95_M": -12.074239393729346,
+   "base_score_mean_M": 52.925226512448546
+  }
+ }
+}
