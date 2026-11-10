@@ -137,25 +137,93 @@ def candidate_matrix(world: World, target: np.ndarray, circles: np.ndarray, inc_
 
 
 def solve_cover(A, cost: np.ndarray, time_limit: float = 600.0, mip_gap: float = 1e-4,
-                verbose: bool = True) -> np.ndarray:
-    """Minimum-cost set cover (every row covered >= 1) -> boolean mask of chosen candidates."""
-    # a candidate that covers nothing can only cost money
+                verbose: bool = True, B=None, prize: np.ndarray | None = None) -> np.ndarray:
+    """Minimum-cost set cover (every row of A covered >= 1) -> boolean mask of chosen candidates.
+
+    Prize-collecting extension (B, prize given): B is (optional pipes x candidates) "wholly inside";
+    each optional pipe i earns prize[i] > 0 once if ANY chosen circle contains it. Modelled with a
+    continuous z_i in [0, 1], objective -prize_i z_i, z_i <= sum_j B_ij x_j (binary at the optimum)."""
+    has_prize = B is not None and prize is not None and len(prize) > 0
+    # a candidate that covers nothing (and collects no prize) can only cost money
     useful = np.asarray(A.sum(axis=0)).ravel() > 0
+    if has_prize:
+        useful |= np.asarray(B.sum(axis=0)).ravel() > 0
     Au = A[:, useful].tocsr()
+    nx = Au.shape[1]
+    if has_prize:
+        Bu = B[:, useful].tocsr()
+        nz = Bu.shape[0]
+        c = np.concatenate([cost[useful], -np.asarray(prize, float)])
+        cons = [
+            LinearConstraint(sparse.hstack([Au, sparse.csr_matrix((Au.shape[0], nz))]).tocsr(),
+                             lb=np.ones(Au.shape[0]), ub=np.inf),
+            LinearConstraint(sparse.hstack([-Bu, sparse.identity(nz, format="csr")]).tocsr(),
+                             lb=-np.inf, ub=np.zeros(nz)),
+        ]
+        integrality = np.concatenate([np.ones(nx), np.zeros(nz)])
+    else:
+        c = cost[useful]
+        cons = LinearConstraint(Au, lb=np.ones(Au.shape[0]), ub=np.inf)
+        integrality = np.ones(nx)
     res = milp(
-        c=cost[useful],
-        constraints=LinearConstraint(Au, lb=np.ones(Au.shape[0]), ub=np.inf),
-        integrality=np.ones(Au.shape[1]),
+        c=c,
+        constraints=cons,
+        integrality=integrality,
         bounds=Bounds(0, 1),
         options={"time_limit": time_limit, "mip_rel_gap": mip_gap, "disp": verbose},
     )
     if res.x is None:
         raise RuntimeError(f"set cover failed: {res.message}")
     chosen = np.zeros(len(cost), dtype=bool)
-    chosen[np.flatnonzero(useful)[res.x > 0.5]] = True
+    chosen[np.flatnonzero(useful)[res.x[:nx] > 0.5]] = True
     if verbose:
-        print(f"  MILP: {res.message}  objective ${res.fun:,.0f}  ({chosen.sum()} circles)")
+        extra = ""
+        if has_prize:
+            z = res.x[nx:] > 0.5
+            extra = f", {z.sum()} of {nz} paying copper/brass swept (prize ${np.asarray(prize)[z].sum():,.0f})"
+        print(f"  MILP: {res.message}  objective ${res.fun:,.0f}  ({chosen.sum()} circles{extra})")
     return chosen
+
+
+def optional_value(world: World, pref_year: np.ndarray) -> np.ndarray:
+    """Net expected $ saved by replacing each non-iron (copper/brass) non-poly pipe at the start of project
+    year t instead of never (leak-aware, project window only):
+
+        value(t) = K * (F(25) - F(t))  -  200 * L * (1 - F(t)),   F(t) = P(leak before year t)
+
+    t = the year its area is dug in a reference plan (`pref_year`, e.g. expected_score(...)["repl_year"]):
+    its own replacement year if the reference replaces it, otherwise that of the nearest iron pipe.
+    Returns an array over ALL pipes (0 for iron / polyurethane)."""
+    from .world import N_YEARS
+
+    opt = np.flatnonzero(world.nonpoly0 & ~world.required)
+    req = np.flatnonzero(world.required)
+    t = np.asarray(pref_year, float)[opt].copy()
+    far = t >= N_YEARS
+    if far.any():
+        tree = cKDTree(np.column_stack([world.mx[req], world.my[req]]))
+        _, nn = tree.query(np.column_stack([world.mx[opt[far]], world.my[opt[far]]]))
+        t[far] = np.asarray(pref_year, float)[req[nn]]
+    t = np.clip(t, 0, N_YEARS - 1).astype(np.int64)
+    Ft = world.leak_prob_by(t, opt)
+    Fend = world.leak_prob_by(np.full(len(opt), N_YEARS), opt)
+    v = np.zeros(world.n)
+    v[opt] = world.leak_cost[opt] * (Fend - Ft) - 200.0 * world.length[opt] * (1.0 - Ft)
+    return v
+
+
+def optional_matrix(world: World, circles: np.ndarray, pipes: np.ndarray):
+    """(len(pipes) x candidates) CSC: pipe wholly inside the candidate (real rule, no margin)."""
+    pos = np.full(world.n, -1, dtype=np.int64)
+    pos[pipes] = np.arange(len(pipes))
+    rows, cols = [], []
+    for j, (cx, cy, r) in enumerate(circles):
+        p = pos[world.members(cx, cy, r)]
+        p = p[p >= 0]
+        rows.append(p)
+        cols.append(np.full(len(p), j, dtype=np.int64))
+    rows, cols = np.concatenate(rows), np.concatenate(cols)
+    return sparse.csc_matrix((np.ones(len(rows)), (rows, cols)), shape=(len(pipes), len(circles)))
 
 
 def delay_penalty(world: World, A, tidx: np.ndarray, pref_year: np.ndarray, lam: float,
@@ -202,19 +270,45 @@ def build_circles(world: World, params=None, k_max: int = 25, same_surface_k: in
                   extra_circles: np.ndarray | None = None, time_limit: float = 900.0,
                   cushion: float = CUSHION, min_margin: float = MIN_MARGIN,
                   pref_year: np.ndarray | None = None, lam: float = 0.0,
+                  opt_pref_year: np.ndarray | None = None,
                   verbose: bool = True) -> np.ndarray:
     """Whole set-cover construction: same target choice (iron + paying copper/brass) and the same
     'swallowed copper/brass' charge as construct.Builder, then candidates + MILP. Returns (x, y, r).
 
-    pref_year + lam > 0 add `delay_penalty` to every candidate's cost (time-aware cover)."""
+    pref_year + lam > 0 add `delay_penalty` to every candidate's cost (time-aware cover).
+
+    opt_pref_year (prize-collecting copper/brass): instead of fixing the copper/brass targets up front
+    with the standalone h_opt rule, only iron must be covered; every copper/brass pipe gets the
+    time-aware `optional_value` at the year its area is dug in a reference plan. Pipes worth replacing
+    (value > 0) are a prize the MILP collects once if any chosen circle contains them (candidates are
+    also grown from them); pipes not worth it charge -value to every candidate that swallows them
+    (as before, slightly conservative when chosen circles overlap)."""
     from .construct import Builder, Params
 
-    b = Builder(world, params or Params(verbose=False))
-    cands = generate_candidates(world, b.target, k_max=k_max, same_surface_k=same_surface_k, r_max=r_max,
+    if opt_pref_year is None:
+        b = Builder(world, params or Params(verbose=False))
+        target, inc_net = b.target, b.inc_net
+        prize_pipes = np.empty(0, dtype=np.int64)
+    else:
+        v = optional_value(world, opt_pref_year)
+        target = world.required.copy()
+        inc_net = np.where(v < 0, -v, 0.0)
+        prize_pipes = np.flatnonzero(v > 0)
+        if verbose:
+            n_opt = int((world.nonpoly0 & ~world.required).sum())
+            print(f"  copper/brass: {len(prize_pipes)} of {n_opt} worth replacing "
+                  f"(total value ${v[prize_pipes].sum():,.0f}); the rest charge ${inc_net.sum():,.0f} if swallowed")
+    seeds = target.copy()
+    seeds[prize_pipes] = True
+    cands = generate_candidates(world, seeds, k_max=k_max, same_surface_k=same_surface_k, r_max=r_max,
                                 neigh_radius=r_max, extra_circles=extra_circles, cushion=cushion,
                                 verbose=verbose)
-    A, cost, tidx = candidate_matrix(world, b.target, cands, b.inc_net, min_margin=min_margin)
+    A, cost, tidx = candidate_matrix(world, target, cands, inc_net, min_margin=min_margin)
     if pref_year is not None and lam > 0:
         cost = cost + delay_penalty(world, A, tidx, pref_year, lam, verbose=verbose)
-    chosen = solve_cover(A, cost, time_limit=time_limit, verbose=verbose)
+    if len(prize_pipes):
+        B = optional_matrix(world, cands, prize_pipes)
+        chosen = solve_cover(A, cost, time_limit=time_limit, verbose=verbose, B=B, prize=v[prize_pipes])
+    else:
+        chosen = solve_cover(A, cost, time_limit=time_limit, verbose=verbose)
     return cands[chosen]

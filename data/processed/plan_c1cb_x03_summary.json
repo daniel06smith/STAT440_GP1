@@ -1,0 +1,55 @@
+{
+  "tag": "c1cb_x03",
+  "cost_formula": "corrected",
+  "risk_file": "leak_risk_all_x0.3.csv",
+  "risk_probability_horizon_years": 1.0,
+  "yearly_risk": true,
+  "leak_aware": true,
+  "builder_params": {
+    "construct": "setcover",
+    "sc_k": 40,
+    "sc_same_k": 40,
+    "sc_rmax": 200.0,
+    "sc_seed_plans": [
+      "x03_leakaware_setcover40_c1",
+      "x03_leakaware_setcover40"
+    ],
+    "sc_cushion": 0.01,
+    "sc_min_margin": 0.005,
+    "sc_lam": 0.0,
+    "sc_pref_plan": null,
+    "sc_opt_ref": "c1_hedge25"
+  },
+  "monte_carlo_seed": 1,
+  "n_circles": 12507,
+  "independent_coverage": {
+    "n_required": 26245,
+    "n_uncovered": 0,
+    "min_margin_m": 0.005232058467962819
+  },
+  "expected": {
+    "feasible": true,
+    "spend": 158784680.3624948,
+    "surplus": 91215319.6375052,
+    "leak_cost": 19186720.9631297,
+    "score": 72028598.6743755,
+    "last_year": 15,
+    "last_year_no_leaks": 17
+  },
+  "monte_carlo_20_draws": {
+    "score_mean": 72013232.70938659,
+    "spend_mean": 158669528.53850004,
+    "leak_cost_mean": 19317238.752113372,
+    "last_year_mean": 15.0,
+    "n_leaks_mean": 1696.8,
+    "score_sd": 769747.6237832224,
+    "spend_sd": 351920.7582637231,
+    "leak_cost_sd": 709299.6732673475,
+    "last_year_sd": 0.0,
+    "n_leaks_sd": 36.91184377034444,
+    "score_p05": 70969534.06321353,
+    "score_p95": 73354825.15820369,
+    "n_draws": 20
+  },
+  "seconds": 370.4
+}

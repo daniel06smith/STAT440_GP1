@@ -79,7 +79,13 @@ ap.add_argument("--sc-lam", type=float, default=0.0,
 ap.add_argument("--sc-pref-plan", default=None,
                 help="setcover: submission tag whose (leak-aware expected) replacement years define each pipe's "
                      "preferred year for the timing penalty (needs --sc-lam > 0)")
+ap.add_argument("--sc-opt-ref", default=None,
+                help="setcover: choose copper/brass inside the MILP (prize-collecting) instead of the standalone "
+                     "h_opt rule, valuing each at the year its area is dug in this reference submission tag "
+                     "(needs --yearly)")
 args = ap.parse_args()
+if args.sc_opt_ref and not args.yearly:
+    ap.error("--sc-opt-ref needs --yearly")
 if args.leak_aware and not args.yearly:
     ap.error("--leak-aware needs --yearly")
 
@@ -109,16 +115,21 @@ else:
             ap.error("--sc-lam needs --sc-pref-plan")
         ref = prepare(world, read_submission(ROOT / "submission" / f"submission_{args.sc_pref_plan}.csv"))
         pref = expected_score(world, ref, leak_aware=True)["repl_year"]
+    opt_pref = None
+    if args.sc_opt_ref:
+        ref = prepare(world, read_submission(ROOT / "submission" / f"submission_{args.sc_opt_ref}.csv"))
+        opt_pref = expected_score(world, ref, leak_aware=True)["repl_year"]
     circles = setcover.build_circles(world, Params(verbose=False, **pkw), k_max=args.sc_k,
                                      same_surface_k=args.sc_same_k, r_max=args.sc_rmax,
                                      extra_circles=np.vstack(extra) if extra else None,
                                      cushion=args.sc_cushion, min_margin=args.sc_min_margin,
-                                     pref_year=pref, lam=args.sc_lam)
+                                     pref_year=pref, lam=args.sc_lam, opt_pref_year=opt_pref)
     prep, _ = order_plan(world, prepare(world, circles), leak_aware=args.leak_aware,
                          min_margin=args.sc_min_margin)
     pkw.update(construct="setcover", sc_k=args.sc_k, sc_same_k=args.sc_same_k, sc_rmax=args.sc_rmax,
                sc_seed_plans=args.sc_seed_plans, sc_cushion=args.sc_cushion,
-               sc_min_margin=args.sc_min_margin, sc_lam=args.sc_lam, sc_pref_plan=args.sc_pref_plan)
+               sc_min_margin=args.sc_min_margin, sc_lam=args.sc_lam, sc_pref_plan=args.sc_pref_plan,
+               sc_opt_ref=args.sc_opt_ref)
 
 sub_path = ROOT / "submission" / f"submission_{args.tag}.csv"
 write_submission(prep.circles, sub_path)
