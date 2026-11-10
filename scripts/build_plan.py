@@ -69,6 +69,16 @@ ap.add_argument("--sc-same-k", type=int, default=25, help="setcover: same-surfac
 ap.add_argument("--sc-rmax", type=float, default=150.0, help="setcover: largest candidate radius (m)")
 ap.add_argument("--sc-seed-plans", nargs="*", default=[],
                 help="setcover: submission tags whose circles are added as candidates (cover can only get cheaper)")
+ap.add_argument("--sc-cushion", type=float, default=0.05,
+                help="setcover: spare radius (m) beyond the farthest end point of a circle's own pipes")
+ap.add_argument("--sc-min-margin", type=float, default=0.04,
+                help="setcover: a pipe only counts as covered if inside by at least this (m); also used when "
+                     "dropping redundant circles")
+ap.add_argument("--sc-lam", type=float, default=0.0,
+                help="setcover: timing penalty strength ($ per $ of 200 $/m pulled one year early); 0 = off")
+ap.add_argument("--sc-pref-plan", default=None,
+                help="setcover: submission tag whose (leak-aware expected) replacement years define each pipe's "
+                     "preferred year for the timing penalty (needs --sc-lam > 0)")
 args = ap.parse_args()
 if args.leak_aware and not args.yearly:
     ap.error("--leak-aware needs --yearly")
@@ -93,12 +103,22 @@ else:
     from pipeplan.pipeline import order_plan  # noqa: E402
 
     extra = [read_submission(ROOT / "submission" / f"submission_{t}.csv") for t in args.sc_seed_plans]
+    pref = None
+    if args.sc_lam > 0:
+        if not args.sc_pref_plan:
+            ap.error("--sc-lam needs --sc-pref-plan")
+        ref = prepare(world, read_submission(ROOT / "submission" / f"submission_{args.sc_pref_plan}.csv"))
+        pref = expected_score(world, ref, leak_aware=True)["repl_year"]
     circles = setcover.build_circles(world, Params(verbose=False, **pkw), k_max=args.sc_k,
                                      same_surface_k=args.sc_same_k, r_max=args.sc_rmax,
-                                     extra_circles=np.vstack(extra) if extra else None)
-    prep, _ = order_plan(world, prepare(world, circles), leak_aware=args.leak_aware)
+                                     extra_circles=np.vstack(extra) if extra else None,
+                                     cushion=args.sc_cushion, min_margin=args.sc_min_margin,
+                                     pref_year=pref, lam=args.sc_lam)
+    prep, _ = order_plan(world, prepare(world, circles), leak_aware=args.leak_aware,
+                         min_margin=args.sc_min_margin)
     pkw.update(construct="setcover", sc_k=args.sc_k, sc_same_k=args.sc_same_k, sc_rmax=args.sc_rmax,
-               sc_seed_plans=args.sc_seed_plans)
+               sc_seed_plans=args.sc_seed_plans, sc_cushion=args.sc_cushion,
+               sc_min_margin=args.sc_min_margin, sc_lam=args.sc_lam, sc_pref_plan=args.sc_pref_plan)
 
 sub_path = ROOT / "submission" / f"submission_{args.tag}.csv"
 write_submission(prep.circles, sub_path)

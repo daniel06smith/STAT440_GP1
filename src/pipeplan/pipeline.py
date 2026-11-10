@@ -30,7 +30,7 @@ def build_plan(world: World, params: Params | None = None, order_iters: int = 8,
 
 
 def order_plan(world: World, prep0: Prepared, order_iters: int = 8, verbose: bool = True,
-               leak_aware: bool = False) -> tuple[Prepared, list]:
+               leak_aware: bool = False, min_margin: float = 0.04) -> tuple[Prepared, list]:
     """Order a set of circles (Smith's rule, then the LP year assignment when the risk is yearly)
     and drop circles that end up skipped. Returns (Prepared in execution order, log)."""
     ordered, log = smith_order(world, prep0, iters=order_iters, verbose=verbose, leak_aware=leak_aware)
@@ -49,7 +49,7 @@ def order_plan(world: World, prep0: Prepared, order_iters: int = 8, verbose: boo
             if sc > best_score:
                 best, best_score = cur, sc
         ordered = best
-    return drop_redundant(world, ordered), log
+    return drop_redundant(world, ordered, min_margin=min_margin), log
 
 
 # ------------------------------------------------------------------ outputs

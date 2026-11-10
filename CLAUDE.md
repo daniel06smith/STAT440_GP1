@@ -288,6 +288,19 @@ not one-off scratch work:
   offline plan (not yet uploaded as of 2026-11-09). Paired results:
   `data/processed/compare_setcover.csv`.
   Timing is ignored when choosing circles (ordering still is time-aware).
+  **There is no timing headroom left**: one circle per pipe (maximal ordering
+  freedom, leak-aware LP order) still has expected leak cost $19.30M vs $19.25M
+  for setcover40 (all_x0.3 world) -- leak cost is set by the $10M/yr pace and the
+  hazard, not by grouping. `--sc-lam` (time-aware penalty, `setcover.delay_penalty`)
+  changed nothing at lam 0.03-0.3; leave it off.
+  **Radius cushion**: `--sc-cushion 0.01 --sc-min-margin 0.005` (default 0.05 /
+  0.04) saves ~$0.27M spend with every iron pipe still >= 5 mm inside (coordinates
+  and circles are both in whole cm, so this is far beyond float error).
+  `submission_x03_leakaware_setcover40_c1.csv` = setcover40 with that cushion:
+  +$1.34-1.55M vs `x03_leakaware` (+$0.24-0.27M vs setcover40) in all 4 worlds,
+  wins 89-98%; exact integer-cm check: 0 of 26,245 iron pipes uncovered. **Current
+  best offline plan (not yet uploaded, 2026-11-09).** If an upload is ever
+  rejected for coverage, fall back to `submission_x03_leakaware_setcover40.csv`.
 - **Circle design (original)**: heuristic spatial clustering (e.g. DBSCAN / greedy
   circle packing seeded from the ~8-14m nearest-neighbor spacing found
   in EDA, ordered by risk density) with local-search refinement on

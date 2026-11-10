@@ -36,12 +36,13 @@ from .geometry import min_enclosing_circle
 from .simulator import fixed_cost
 from .world import World
 
-CUSHION = 0.05  # m of spare radius beyond the farthest assigned end point (same as Builder.circles)
+CUSHION = 0.05  # default m of spare radius beyond the farthest assigned end point (same as Builder.circles)
+MIN_MARGIN = 0.04  # default m a target must be inside a circle by to count as covered (= drop_redundant)
 
 
-def _final_circle(world: World, group: np.ndarray):
+def _final_circle(world: World, group: np.ndarray, cushion: float = CUSHION):
     """Minimum circle of the group's end points, centre rounded to the cent, radius rounded UP to the
-    cent with CUSHION spare -- exactly what would be written to the submission file."""
+    cent with `cushion` spare -- exactly what would be written to the submission file."""
     pts = np.column_stack([
         np.concatenate([world.x1[group], world.x2[group]]),
         np.concatenate([world.y1[group], world.y2[group]]),
@@ -49,12 +50,12 @@ def _final_circle(world: World, group: np.ndarray):
     cx, cy, _ = min_enclosing_circle(pts)
     cx, cy = round(cx, 2), round(cy, 2)
     need = math.sqrt(((pts[:, 0] - cx) ** 2 + (pts[:, 1] - cy) ** 2).max())
-    return cx, cy, math.ceil((need + CUSHION) * 100) / 100
+    return cx, cy, math.ceil((need + cushion) * 100) / 100
 
 
 def generate_candidates(world: World, target: np.ndarray, k_max: int = 12, r_max: float = 80.0,
                         neigh_radius: float = 60.0, extra_circles: np.ndarray | None = None,
-                        same_surface_k: int = 0, verbose: bool = True) -> np.ndarray:
+                        same_surface_k: int = 0, cushion: float = CUSHION, verbose: bool = True) -> np.ndarray:
     """Candidate circles (x, y, r): solo circle per target pipe, the circle of each target pipe plus
     its 1..k_max nearest target pipes (by mid point, within neigh_radius), the same with only
     target pipes of the SAME surface (1..same_surface_k; these avoid adding a second surface rate),
@@ -67,7 +68,7 @@ def generate_candidates(world: World, target: np.ndarray, k_max: int = 12, r_max
     if same_surface_k:
         pools += [(tall[world.surf_bit[tall] == b], same_surface_k) for b in np.unique(world.surf_bit[tall])]
     for tidx, kk in pools:
-        _grow(world, tidx, kk, r_max, neigh_radius, seen, out, t0, verbose)
+        _grow(world, tidx, kk, r_max, neigh_radius, seen, out, t0, verbose, cushion)
     if extra_circles is not None:
         for c in np.asarray(extra_circles).reshape(-1, 3):
             key = tuple(round(float(v), 2) for v in c)
@@ -79,7 +80,7 @@ def generate_candidates(world: World, target: np.ndarray, k_max: int = 12, r_max
     return np.array(out)
 
 
-def _grow(world, tidx, k_max, r_max, neigh_radius, seen, out, t0, verbose):
+def _grow(world, tidx, k_max, r_max, neigh_radius, seen, out, t0, verbose, cushion):
     """Add the circle of each pipe in tidx plus its 1..k_max nearest pipes of tidx."""
     tree = cKDTree(np.column_stack([world.mx[tidx], world.my[tidx]]))
     k = min(k_max + 1, len(tidx))
@@ -95,13 +96,13 @@ def _grow(world, tidx, k_max, r_max, neigh_radius, seen, out, t0, verbose):
 
     for a in range(len(tidx)):
         group = [tidx[a]]
-        add(_final_circle(world, np.array(group)))
+        add(_final_circle(world, np.array(group), cushion))
         last_r = None
         for d, b in zip(dist[a, 1:], nn[a, 1:]):
             if not np.isfinite(d):
                 break
             group.append(tidx[b])
-            c = _final_circle(world, np.array(group))
+            c = _final_circle(world, np.array(group), cushion)
             if c[2] > r_max:
                 break
             if c != last_r:
@@ -112,7 +113,7 @@ def _grow(world, tidx, k_max, r_max, neigh_radius, seen, out, t0, verbose):
 
 
 def candidate_matrix(world: World, target: np.ndarray, circles: np.ndarray, inc_net: np.ndarray,
-                     min_margin: float = 0.04):
+                     min_margin: float = MIN_MARGIN):
     """Coverage matrix (targets x candidates, CSC) and cost vector.
 
     A target only counts as covered if it is inside with >= min_margin metres to spare (the same
@@ -157,16 +158,63 @@ def solve_cover(A, cost: np.ndarray, time_limit: float = 600.0, mip_gap: float =
     return chosen
 
 
+def delay_penalty(world: World, A, tidx: np.ndarray, pref_year: np.ndarray, lam: float,
+                  verbose: bool = True) -> np.ndarray:
+    """Timing penalty ($) for every candidate: what bundling its pipes into one work unit costs.
+
+    pref_year[i] = the project year (0 = 2027) pipe i would be replaced in a reference plan.
+    A circle runs once, in some year t. Pipes it covers that wanted an EARLIER year are delayed
+    (expected loss (K - 200 L) * P(leak between their year and t), the leak-aware delay cost, floored
+    at 0); pipes that wanted a LATER year are paid for early, which costs `lam` $ per $ of their 200 $/m
+    per year pulled forward (budget spent early delays someone else). The circle is credited with the
+    best t among its pipes' preferred years. lam = 0 makes every penalty 0 (run at the earliest year).
+    """
+    t0 = time.time()
+    y_all = np.clip(pref_year[tidx].astype(np.int64), 0, 25)
+    F = world.leak_prob_by  # F(years, idx): P(leak before the start of that project year)
+    gain = np.maximum(world.leak_cost[tidx] - 200.0 * world.length[tidx], 0.0)
+    lin = 200.0 * world.length[tidx]
+    pen = np.zeros(A.shape[1])
+    for j in range(A.shape[1]):
+        rows = A.indices[A.indptr[j]:A.indptr[j + 1]]
+        if len(rows) < 2:
+            continue
+        y = y_all[rows]
+        ts = np.unique(y)
+        if len(ts) == 1:
+            continue
+        g, li, gi = gain[rows], lin[rows], tidx[rows]
+        best = np.inf
+        for t in ts:
+            late = y < t
+            cost = lam * (li[~late] * (y[~late] - t)).sum()
+            if late.any():
+                cost += (g[late] * (F(np.full(late.sum(), t), gi[late]) - F(y[late], gi[late]))).sum()
+            best = min(best, cost)
+        pen[j] = best
+    if verbose:
+        print(f"  delay penalty: {np.count_nonzero(pen)} candidates penalised, total ${pen.sum():,.0f} "
+              f"({time.time() - t0:.0f}s)")
+    return pen
+
+
 def build_circles(world: World, params=None, k_max: int = 25, same_surface_k: int = 25, r_max: float = 150.0,
                   extra_circles: np.ndarray | None = None, time_limit: float = 900.0,
+                  cushion: float = CUSHION, min_margin: float = MIN_MARGIN,
+                  pref_year: np.ndarray | None = None, lam: float = 0.0,
                   verbose: bool = True) -> np.ndarray:
     """Whole set-cover construction: same target choice (iron + paying copper/brass) and the same
-    'swallowed copper/brass' charge as construct.Builder, then candidates + MILP. Returns (x, y, r)."""
+    'swallowed copper/brass' charge as construct.Builder, then candidates + MILP. Returns (x, y, r).
+
+    pref_year + lam > 0 add `delay_penalty` to every candidate's cost (time-aware cover)."""
     from .construct import Builder, Params
 
     b = Builder(world, params or Params(verbose=False))
     cands = generate_candidates(world, b.target, k_max=k_max, same_surface_k=same_surface_k, r_max=r_max,
-                                neigh_radius=r_max, extra_circles=extra_circles, verbose=verbose)
-    A, cost, _ = candidate_matrix(world, b.target, cands, b.inc_net)
+                                neigh_radius=r_max, extra_circles=extra_circles, cushion=cushion,
+                                verbose=verbose)
+    A, cost, tidx = candidate_matrix(world, b.target, cands, b.inc_net, min_margin=min_margin)
+    if pref_year is not None and lam > 0:
+        cost = cost + delay_penalty(world, A, tidx, pref_year, lam, verbose=verbose)
     chosen = solve_cover(A, cost, time_limit=time_limit, verbose=verbose)
     return cands[chosen]
